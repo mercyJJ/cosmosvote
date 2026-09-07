@@ -1,6 +1,6 @@
 # Contract State Inspection
 
-_Relates to issue [#383](https://github.com/PrincessnJoy/cosmosvote/issues/383)._
+_Relates to issue [#383](https://github.com/mercyJJ/cosmosvote/issues/383)._
 
 ---
 

@@ -4,4 +4,5 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "CosmosVote notification service — event polling, dispatch, and PII-safe logging"
-repository = "https://github.com/PrincessnJoy/cosmosvote"
+repository = "https://github.com/mercyJJ/cosmosvote"
+authors = ["mercyJJ <joymercy7879@gmail.com>"]

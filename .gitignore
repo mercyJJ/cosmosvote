@@ -23,3 +23,6 @@ coverage/
 # OS
 .DS_Store
 Thumbs.db
+
+# Proptest snapshots (generated test artifacts)
+**/test_snapshots/

@@ -2,7 +2,7 @@
 
 This document covers security considerations for integrating browser wallets (e.g., Freighter) with the CosmosVote frontend. See also [threat-model.md](./threat-model.md) and [known-issues.md](./known-issues.md).
 
-Related frontend issues: [#312](https://github.com/PrincessnJoy/cosmosvote/issues/312), [#314](https://github.com/PrincessnJoy/cosmosvote/issues/314).
+Related frontend issues: [#312](https://github.com/mercyJJ/cosmosvote/issues/312), [#314](https://github.com/mercyJJ/cosmosvote/issues/314).
 
 ---
 

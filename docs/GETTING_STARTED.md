@@ -13,7 +13,7 @@ This guide walks you through setting up CosmosVote from scratch.
 ## Step 1 — Clone & Build
 
 ```bash
-git clone https://github.com/PrincessnJoy/cosmosvote.git
+git clone https://github.com/mercyJJ/cosmosvote.git
 cd cosmosvote
 rustup target add wasm32-unknown-unknown
 make build

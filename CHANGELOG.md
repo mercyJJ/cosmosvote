@@ -104,7 +104,7 @@ When cutting a release:
 2. Add a fresh empty `[Unreleased]` section above it.
 3. Add a comparison link at the bottom of the file:
    ```
-   [1.1.0]: https://github.com/PrincessnJoy/cosmosvote/compare/v1.0.0...v1.1.0
+   [1.1.0]: https://github.com/mercyJJ/cosmosvote/compare/v1.0.0...v1.1.0
    ```
 4. Tag the release commit: `git tag v1.1.0 && git push --tags`.
 
@@ -137,5 +137,5 @@ When cutting a release:
 - React + Vite frontend proposal browser
 - Full documentation: README, ADRs, security docs, examples
 
-[Unreleased]: https://github.com/PrincessnJoy/cosmosvote/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/PrincessnJoy/cosmosvote/releases/tag/v1.0.0
+[Unreleased]: https://github.com/mercyJJ/cosmosvote/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/mercyJJ/cosmosvote/releases/tag/v1.0.0

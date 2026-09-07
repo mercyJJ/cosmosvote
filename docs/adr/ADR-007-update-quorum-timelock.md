@@ -2,7 +2,7 @@
 
 **Status:** Accepted  
 **Date:** 2026-05-28  
-**Issue:** [#72](https://github.com/PrincessnJoy/cosmosvote/issues/72)
+**Issue:** [#72](https://github.com/mercyJJ/cosmosvote/issues/72)
 
 ## Context
 

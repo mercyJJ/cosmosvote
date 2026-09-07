@@ -1,6 +1,6 @@
 # Role-Based Access Control — Notification Service
 
-_Relates to issue [#368](https://github.com/PrincessnJoy/cosmosvote/issues/368)._
+_Relates to issue [#368](https://github.com/mercyJJ/cosmosvote/issues/368)._
 
 ---
 

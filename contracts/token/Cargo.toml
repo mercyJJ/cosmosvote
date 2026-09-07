@@ -4,7 +4,8 @@ version = "1.0.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "CosmosVote governance token contract — SEP-41 compatible token on Stellar Soroban"
-repository = "https://github.com/PrincessnJoy/cosmosvote"
+repository = "https://github.com/mercyJJ/cosmosvote"
+authors = ["mercyJJ <joymercy7879@gmail.com>"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]

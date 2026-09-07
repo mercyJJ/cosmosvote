@@ -1,6 +1,6 @@
 # Input Validation & Overflow Prevention
 
-_Relates to issue [#367](https://github.com/PrincessnJoy/cosmosvote/issues/367)._
+_Relates to issue [#367](https://github.com/mercyJJ/cosmosvote/issues/367)._
 
 ---
 

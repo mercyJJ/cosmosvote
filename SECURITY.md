@@ -10,7 +10,7 @@
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Please report security issues by emailing **security@cosmosvote.dev** with:
+Please report security issues by emailing **joymercy7879@gmail.com** with:
 
 1. A description of the vulnerability
 2. Steps to reproduce

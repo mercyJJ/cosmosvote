@@ -1365,7 +1365,7 @@
 
 ---
 
-### Issue [#81](https://github.com/PrincessnJoy/cosmosvote/issues/81) — No CORS policy on the RPC endpoint used by the frontend
+### Issue [#81](https://github.com/mercyJJ/cosmosvote/issues/81) — No CORS policy on the RPC endpoint used by the frontend
 
 **Description:** The frontend connects directly to a Soroban RPC URL. If the RPC endpoint does not have proper CORS headers, the frontend will fail in browsers. If it has overly permissive CORS, it exposes the RPC to abuse.
 

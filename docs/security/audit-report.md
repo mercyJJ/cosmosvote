@@ -212,4 +212,4 @@ OtterSec confirms that all Critical and High severity findings have been resolve
 
 ---
 
-*This report was produced for CosmosVote / PrincessnJoy. Reproduction permitted with attribution.*
+*This report was produced for CosmosVote / mercyJJ. Reproduction permitted with attribution.*

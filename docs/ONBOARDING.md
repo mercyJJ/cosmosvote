@@ -50,7 +50,7 @@ git clone https://github.com/<your-username>/cosmosvote.git
 cd cosmosvote
 
 # 2. Add the upstream remote
-git remote add upstream https://github.com/PrincessnJoy/cosmosvote.git
+git remote add upstream https://github.com/mercyJJ/cosmosvote.git
 
 # 3. Add WASM target
 rustup target add wasm32-unknown-unknown
@@ -70,7 +70,7 @@ All 60+ tests should pass with no errors.
 Find issue → comment to claim it → branch → change → test → PR
 ```
 
-1. Browse [open issues](https://github.com/PrincessnJoy/cosmosvote/issues) filtered by `good first issue` or `documentation`.
+1. Browse [open issues](https://github.com/mercyJJ/cosmosvote/issues) filtered by `good first issue` or `documentation`.
 2. Comment on the issue to let maintainers know you're working on it.
 3. Pull the latest main and create a focused branch:
 
@@ -103,7 +103,7 @@ git commit -m "fix: prevent quorum bypass on abstain-only votes (#298)"
 
 ```bash
 git push -u origin <your-branch>
-gh pr create --repo PrincessnJoy/cosmosvote --base main \
+gh pr create --repo mercyJJ/cosmosvote --base main \
   --title "fix: prevent quorum bypass (#298)" \
   --body "Closes #298"
 ```
@@ -139,6 +139,6 @@ make coverage                                    # HTML coverage report → cove
 
 ## 6. Getting Help
 
-- Open a [GitHub Discussion](https://github.com/PrincessnJoy/cosmosvote/discussions) for questions.
+- Open a [GitHub Discussion](https://github.com/mercyJJ/cosmosvote/discussions) for questions.
 - Review existing issues and PRs for context on ongoing work.
 - Check `docs/adr/` for rationale behind key design decisions.
