@@ -20,7 +20,7 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-mutants
-        run: cargo install cargo-mutants --locked
+        run: cargo install cargo-mutants --version 26.0.0 --locked
       - name: Run mutation testing
         run: |
           cargo mutants \

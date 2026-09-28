@@ -21,4 +21,3 @@ inherits = "release"
 
 [dev-dependencies]
 serde_json = "1.0"
-debug-assertions = true
