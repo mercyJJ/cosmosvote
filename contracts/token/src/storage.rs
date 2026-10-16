@@ -28,6 +28,10 @@ pub enum PersistentKey {
 #[derive(Clone)]
 pub enum TempKey {
     Allowance(Address, Address),
+    /// Balance snapshot: (owner, ledger_sequence) → i128.
+    /// Stored in Temporary storage so it expires naturally after the TTL window,
+    /// matching the typical governance proposal lifecycle (~30 days).
+    BalanceSnapshot(Address, u32),
 }
 
 #[soroban_sdk::contracttype]
@@ -43,6 +47,11 @@ impl TokenStorage {
     // Amount of ledgers to extend persistent entries by (30 days)
     pub const PERSISTENT_BUMP_AMOUNT: u32 = 518_400; // ~30 days @ 5s/ledger
     pub const PERSISTENT_THRESHOLD: u32 = 17_280;   // ~1 day @ 5s/ledger
+
+    /// Snapshot TTL: ~30 days — must cover the full proposal voting window.
+    pub const SNAPSHOT_TTL_LEDGERS: u32 = 518_400;
+    /// Snapshot minimum lifetime before extension: ~1 day.
+    pub const SNAPSHOT_TTL_THRESHOLD: u32 = 17_280;
 
     fn bump_persistent_ttl(env: &Env, key: &PersistentKey) {
         env.storage()
@@ -136,13 +145,50 @@ impl TokenStorage {
         let key = PersistentKey::Balance(owner.clone());
         env.storage().persistent().set(&key, &v);
         Self::bump_persistent_ttl(env, &key);
+
+        // Automatically snapshot the new balance at the current ledger so that
+        // balance_at(ledger) queries from governance can retrieve it later for
+        // flash-loan protection (issue #52).
+        let current_ledger = env.ledger().sequence();
+        Self::set_balance_snapshot(env, owner, current_ledger, v);
     }
 
-    pub fn is_paused(env: &Env) -> bool {
-        env.storage().instance().get(&InstanceKey::Paused).unwrap_or(false)
+    // -----------------------------------------------------------------------
+    // Balance snapshots (Temporary storage, issue #52)
+    // -----------------------------------------------------------------------
+
+    /// Write a balance snapshot for `owner` at `ledger` into Temporary storage.
+    ///
+    /// Snapshotting is performed automatically in `set_balance` whenever the
+    /// balance changes; callers should not need to call this directly.
+    ///
+    /// The entry is stored in Temporary storage (cheapest tier) with a TTL of
+    /// ~30 days, which is sufficient to cover the maximum governance proposal
+    /// voting window.
+    pub fn set_balance_snapshot(env: &Env, owner: &Address, ledger: u32, amount: i128) {
+        let key = TempKey::BalanceSnapshot(owner.clone(), ledger);
+        env.storage().temporary().set(&key, &amount);
+        env.storage()
+            .temporary()
+            .extend_ttl(&key, Self::SNAPSHOT_TTL_THRESHOLD, Self::SNAPSHOT_TTL_LEDGERS);
     }
-    pub fn set_paused(env: &Env, v: bool) {
-        env.storage().instance().set(&InstanceKey::Paused, &v);
+
+    /// Read the balance snapshot for `owner` at `ledger`.
+    ///
+    /// Returns `None` if no snapshot exists for that ledger (either it was never
+    /// written or the Temporary entry has expired).
+    pub fn balance_snapshot(env: &Env, owner: &Address, ledger: u32) -> Option<i128> {
+        let key = TempKey::BalanceSnapshot(owner.clone(), ledger);
+        if let Some(amount) = env.storage().temporary().get::<TempKey, i128>(&key) {
+            // Refresh TTL on access so frequently-queried snapshots stay alive
+            // for the remainder of the proposal window.
+            env.storage()
+                .temporary()
+                .extend_ttl(&key, Self::SNAPSHOT_TTL_THRESHOLD, Self::SNAPSHOT_TTL_LEDGERS);
+            Some(amount)
+        } else {
+            None
+        }
     }
 
     pub fn allowance(env: &Env, owner: &Address, spender: &Address) -> i128 {

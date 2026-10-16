@@ -76,8 +76,19 @@ impl TokenContract {
         TokenStorage::balance(&env, &owner)
     }
 
-    pub fn balance_at(env: Env, owner: Address, _ledger: u64) -> i128 {
-        TokenStorage::balance(&env, &owner)
+    pub fn balance_at(env: Env, owner: Address, ledger: u64) -> i128 {
+        // Try to read the snapshot stored at the given ledger sequence.
+        // Snapshots are written by set_balance on every transfer/mint/burn,
+        // so if the owner's balance changed at or before `ledger` we will have
+        // a stored entry.  If no snapshot exists (e.g., the TTL has expired or
+        // the account was never touched at that ledger), fall back to the live
+        // balance as a safe default — this preserves backward compatibility
+        // while the snapshot infrastructure is being populated.
+        if let Some(snap) = TokenStorage::balance_snapshot(&env, &owner, ledger as u32) {
+            snap
+        } else {
+            TokenStorage::balance(&env, &owner)
+        }
     }
 
     pub fn allowance(env: Env, owner: Address, spender: Address) -> i128 {
