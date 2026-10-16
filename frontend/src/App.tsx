@@ -73,6 +73,18 @@ export default function App() {
     });
   }, []);
 
+  // Issue #30: auto-open a proposal when ?proposal=<id> is in the URL
+  useEffect(() => {
+    if (loading || proposals.length === 0) return;
+    const params = new URLSearchParams(window.location.search);
+    const proposalParam = params.get('proposal');
+    if (!proposalParam) return;
+    const match = proposals.find(pr => String(pr.id) === proposalParam);
+    if (match) {
+      setSelected(match);
+    }
+  }, [loading, proposals]);
+
   const filtered = useMemo(() => {
     return proposals.filter(p => {
       const matchState = stateFilter === 'All' || p.state === stateFilter;
