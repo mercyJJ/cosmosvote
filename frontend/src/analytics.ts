@@ -2,14 +2,32 @@
  * Privacy-preserving analytics module.
  * - No PII, no wallet addresses, no IP collection
  * - Disabled by default (VITE_ANALYTICS_ENABLED must be "true" to enable)
+ * - Respects user consent stored in localStorage under "analytics_consent"
+ *   (managed by the CookieConsent component — Issue #32)
  * - Batches events and flushes to VITE_ANALYTICS_ENDPOINT if set, else logs in dev
  */
 
 const ENABLED = import.meta.env.VITE_ANALYTICS_ENABLED === "true";
 const ENDPOINT = import.meta.env.VITE_ANALYTICS_ENDPOINT as string | undefined;
+
+/** Returns true only when analytics are enabled AND the user has accepted. */
+function isAnalyticsAllowed(): boolean {
+  if (!ENABLED) return false;
+  try {
+    const consent = localStorage.getItem("analytics_consent");
+    // Allow only on explicit acceptance; null (undecided) and "rejected" both block.
+    return consent === "accepted";
+  } catch {
+    return false;
+  }
+}
 const IS_DEV = import.meta.env.DEV;
 const BATCH_SIZE = 10;
 const FLUSH_INTERVAL_MS = 30_000;
+
+// Re-export consent helpers so other modules can read/set consent without a
+// direct dependency on the CookieConsent component.
+export { getStoredConsent, setStoredConsent } from './components/CookieConsent';
 
 interface AnalyticsEvent {
   name: string;
@@ -64,16 +82,18 @@ export function trackEvent(
   name: string,
   props?: Record<string, string | number>
 ): void {
-  if (!ENABLED) return;
+  if (!isAnalyticsAllowed()) return;
   queue.push({ name, props, sessionId: SESSION_ID, ts: Date.now() });
   persist();
   if (queue.length >= BATCH_SIZE) flush();
 }
 
-// Periodic flush
+// Periodic flush — only run the interval when analytics are allowed
 if (ENABLED) {
-  setInterval(flush, FLUSH_INTERVAL_MS);
+  setInterval(() => {
+    if (isAnalyticsAllowed()) flush();
+  }, FLUSH_INTERVAL_MS);
   window.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") flush();
+    if (document.visibilityState === "hidden" && isAnalyticsAllowed()) flush();
   });
 }

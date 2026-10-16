@@ -8,6 +8,7 @@ import { Pagination } from './components/Pagination';
 import { ConnectWalletModal } from './components/ConnectWalletModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AriaLive } from './components/AriaLive';
+import { CookieConsent } from './components/CookieConsent';
 import { ACTIVE_NETWORK } from './config';
 import { formatTokenAmount, maskAddress } from './utils';
 import { useTheme } from './useTheme';
@@ -255,9 +256,30 @@ export default function App() {
         </main>
       </ErrorBoundary>
 
+      {/* ── Footer ── */}
+      <footer
+        style={{
+          textAlign: 'center',
+          padding: '1.5rem 1rem',
+          fontSize: '0.75rem',
+          color: 'var(--text-muted)',
+          borderTop: '1px solid var(--border-color)',
+        }}
+      >
+        <a
+          href="/docs/analytics-policy.md"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: '#60a5fa', textDecoration: 'underline' }}
+        >
+          Analytics &amp; Privacy Policy
+        </a>
+      </footer>
+
       {/* ── Modals ── */}
 
       {selected && (
+        <ProposalDetail
         <ProposalDetail
           proposal={selected}
           decimals={decimals}
@@ -273,6 +295,9 @@ export default function App() {
       )}
 
       {showModal && <ConnectWalletModal />}
+
+      {/* ── Cookie consent banner (Issue #32) ── */}
+      <CookieConsent />
     </div>
   );
 }
