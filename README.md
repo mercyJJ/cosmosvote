@@ -16,6 +16,7 @@ CosmosVote enables DAOs, protocols, and communities to create proposals, cast to
 - [Project Overview](#project-overview)
 - [Architecture.](#architecture)
 - [Features](#features)
+- [Vote Delegation](#vote-delegation)
 - [Quick Start](#quick-start)
 - [Project Structure](#project-structure)
 - [Governance Contract Reference](#governance-contract-reference)
@@ -123,6 +124,55 @@ sequenceDiagram
 - **Admin controls** — pause/unpause, update quorum, transfer admin privileges
 - **Proposal cooldown** — optional rate limiting per proposer
 - **Minimum balance requirement** — optional minimum tokens to create proposals
+
+---
+
+## Vote Delegation
+
+Token holders can delegate their voting power to a trusted representative
+without transferring tokens. Delegation is recorded on-chain in the token
+contract and takes effect immediately.
+
+### Key Rules
+
+- **One level deep** — A delegates to B. B votes with their own balance. There is no transitive (multi-hop) delegation.
+- **Tokens stay in your wallet** — delegation does not move any tokens.
+- **One active delegation at a time** — call `undelegate` before switching delegates.
+- **Delegators cannot vote** — while an active delegation is in place, the delegating address gets `NoVotingPower` if it tries to cast a vote directly.
+- **Cycle prevention** — a direct cycle (A→B, B→A) is rejected with `DelegationCycle` (error 33).
+
+### Quick Reference
+
+| Action | Function | Who authorizes |
+|--------|----------|---------------|
+| Delegate voting power | `token.delegate(owner, delegate_to)` | `owner` |
+| Remove delegation | `token.undelegate(owner)` | `owner` |
+| Check current delegate | `token.get_delegation(owner)` → `Option<Address>` | anyone (read-only) |
+| Compute full delegated weight | `token.get_delegated_weight(voter, delegators)` | anyone (read-only) |
+
+### Example
+
+```
+Alice (10M VOTE) delegates to Bob (5M VOTE):
+  token.delegate(&alice, &bob)
+
+Bob votes Yes on a proposal:
+  governance.cast_vote(&bob, proposal_id, Vote::Yes)
+  → Bob's on-chain weight = 5M (own balance)
+
+Alice tries to vote — rejected:
+  governance.cast_vote(&alice, proposal_id, Vote::No)
+  → Err(NoVotingPower)
+
+Alice undelegates and votes on the next proposal:
+  token.undelegate(&alice)
+  governance.cast_vote(&alice, proposal_id_2, Vote::Yes)
+  → Alice's weight = 10M
+```
+
+See [docs/delegation.md](./docs/delegation.md) for the full delegation model,
+worked examples, edge cases, cycle detection behavior, and a delegated vs.
+non-delegated comparison table.
 
 ---
 
