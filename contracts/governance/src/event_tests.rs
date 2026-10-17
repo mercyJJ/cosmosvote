@@ -220,14 +220,14 @@ fn test_proposal_executed_event() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_proposal_cancelled_event() {
+fn test_proposal_cancelled_event_no_reason() {
     let env = Env::default();
     let t = setup(&env);
     let gov_id = t.governance.address.clone();
     let voter_a = t.voter_a.clone();
     let admin = t.admin.clone();
     let id = create_proposal(&t, &voter_a);
-    t.governance.cancel(&admin, &id);
+    t.governance.cancel(&admin, &id, &None);
 
     let all = env.events().all();
     let ev = all
@@ -244,5 +244,41 @@ fn test_proposal_cancelled_event() {
         })
         .expect("proposal_cancelled event not emitted");
 
-    assert_eq!(ev.2, (id, admin.clone()).into_val(&env));
+    // reason field should be empty string when None is passed
+    let expected_reason = soroban_sdk::String::from_str(&env, "");
+    assert_eq!(ev.2, (id, admin.clone(), 0u32, expected_reason).into_val(&env));
+}
+
+#[test]
+fn test_proposal_cancelled_event_with_reason() {
+    let env = Env::default();
+    let t = setup(&env);
+    let gov_id = t.governance.address.clone();
+    let voter_a = t.voter_a.clone();
+    let admin = t.admin.clone();
+    let id = create_proposal(&t, &voter_a);
+    let reason = soroban_sdk::String::from_str(&env, "Duplicate proposal");
+    t.governance.cancel(&admin, &id, &Some(reason.clone()));
+
+    let all = env.events().all();
+    let ev = all
+        .iter()
+        .rev()
+        .find(|(cid, topics, _)| {
+            *cid == gov_id
+                && *topics
+                    == vec![
+                        &env,
+                        symbol_short!("gov").into_val(&env),
+                        symbol_short!("cancel").into_val(&env),
+                    ]
+        })
+        .expect("proposal_cancelled event not emitted");
+
+    // reason field should be present in event payload
+    assert_eq!(ev.2, (id, admin.clone(), 0u32, reason.clone()).into_val(&env));
+
+    // verify the reason is also stored on the proposal
+    let proposal = t.governance.get_proposal(&id);
+    assert_eq!(proposal.cancellation_reason, Some(reason));
 }

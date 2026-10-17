@@ -932,7 +932,7 @@ fn test_old_admin_loses_privileges_after_transfer() {
     assert_eq!(result, Err(Ok(ContractError::NotAdmin)));
 
     // New admin can cancel
-    gov.cancel(&new_admin, &proposal_id);
+    gov.cancel(&new_admin, &proposal_id, &None);
     let proposal = gov.get_proposal(&proposal_id);
     assert_eq!(proposal.state, ProposalState::Cancelled);
 }
@@ -1040,7 +1040,7 @@ fn test_pause_does_not_block_execute_cancel() {
     gov.pause(&admin);
     
     // Cancel should still work (admin emergency action)
-    gov.cancel(&admin, &id);
+    gov.cancel(&admin, &id, &None);
     let proposal = gov.get_proposal(&id);
     assert_eq!(proposal.state, ProposalState::Cancelled);
     
@@ -1317,7 +1317,7 @@ fn test_get_proposals_by_state() {
     let id1 = make_proposal(&gov, &env, &voter);
     let id2 = make_proposal(&gov, &env, &voter);
     
-    gov.cancel(&admin, &id1);
+    gov.cancel(&admin, &id1, &None);
     
     let active = gov.get_proposals_by_state(&ProposalState::Active, &0, &10);
     assert_eq!(active.len(), 2);

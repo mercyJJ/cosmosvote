@@ -132,6 +132,8 @@ pub struct Proposal {
     pub voter_count: u32,
     /// Optional treasury disbursement to execute on proposal execution.
     pub treasury_action: Vec<TreasuryAction>,
+    /// Optional reason provided when the proposal was cancelled.
+    pub cancellation_reason: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

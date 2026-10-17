@@ -247,6 +247,7 @@ impl GovernanceContract {
                 Some(a) => Vec::from_array(&env, [a]),
                 None => Vec::new(&env),
             },
+            cancellation_reason: None,
         };
 
         GovernanceStorage::set_proposal(&env, id, &proposal);
@@ -707,7 +708,7 @@ impl GovernanceContract {
         if active_count > 0 {
             GovernanceStorage::set_active_proposal_count(&env, active_count - 1);
         }
-        GovernanceEvents::proposal_cancelled(&env, proposal_id, &admin, proposal.voter_count);
+        GovernanceEvents::proposal_cancelled(&env, proposal_id, &admin, proposal.voter_count, &reason);
         Ok(())
     }
 
