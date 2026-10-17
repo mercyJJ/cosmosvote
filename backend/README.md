@@ -10,6 +10,16 @@ process. Consequently, there is no `/openapi.json` or `/docs` endpoint to docume
 requires an HTTP API and its request/response contracts to be defined before an OpenAPI
 specification and Swagger UI can be generated.
 
+### Subscription Management API
+
+Issue #49's subscription list, update, and delete routes depend on that API foundation. The
+notification service currently has no HTTP router, and its subscription records are not associated
+with an authenticated caller. Its admin/viewer API keys identify shared roles, not individual
+subscribers. Before exposing these routes, define how subscriptions belong to callers and enforce
+that ownership for list, update, and delete; otherwise an authenticated caller could access another
+subscriber's channel details or change their preferences. The API contract and OpenAPI document
+should be added with that ownership model.
+
 ## Error Tracking
 
 Errors are captured via [Sentry](https://sentry.io). Set `SENTRY_DSN` in your environment to enable. Without it, errors are written to `stderr` only.
