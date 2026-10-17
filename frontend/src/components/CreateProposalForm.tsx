@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   SorobanRpc,
   TransactionBuilder,
@@ -30,6 +30,47 @@ const INITIAL_FORM: FormState = {
   duration: '86400', // 1 day in seconds
 };
 
+/** Returns the localStorage key scoped to the wallet address to prevent cross-user leakage. */
+function draftKey(walletAddress: string): string {
+  return `cosmosvote:proposal_draft:${walletAddress}`;
+}
+
+function saveDraft(walletAddress: string, form: FormState): void {
+  try {
+    localStorage.setItem(draftKey(walletAddress), JSON.stringify(form));
+  } catch {
+    // Storage may be full or unavailable — silently ignore
+  }
+}
+
+function loadDraft(walletAddress: string): FormState | null {
+  try {
+    const raw = localStorage.getItem(draftKey(walletAddress));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<FormState>;
+    // Validate shape before returning
+    if (
+      typeof parsed.title === 'string' &&
+      typeof parsed.description === 'string' &&
+      typeof parsed.quorum === 'string' &&
+      typeof parsed.duration === 'string'
+    ) {
+      return parsed as FormState;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function clearDraft(walletAddress: string): void {
+  try {
+    localStorage.removeItem(draftKey(walletAddress));
+  } catch {
+    // ignore
+  }
+}
+
 const DURATION_PRESETS = [
   { label: '1 day', value: '86400' },
   { label: '3 days', value: '259200' },
@@ -57,16 +98,56 @@ export function CreateProposalForm({ walletAddress, onSuccess, onCancel }: Props
   const [touched, setTouched] = useState<Partial<Record<keyof FormState, boolean>>>({});
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [showRestorePrompt, setShowRestorePrompt] = useState(false);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // On mount: check for a saved draft and prompt the user to restore it
+  useEffect(() => {
+    const draft = loadDraft(walletAddress);
+    if (draft && (draft.title || draft.description)) {
+      setShowRestorePrompt(true);
+    }
+  }, [walletAddress]);
+
+  // Auto-save after 1 second of inactivity whenever form changes
+  const scheduleAutosave = useCallback(
+    (nextForm: FormState) => {
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = setTimeout(() => saveDraft(walletAddress, nextForm), 1000);
+    },
+    [walletAddress],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    };
+  }, []);
 
   const errors = fieldError(form);
   const hasErrors = Object.keys(errors).length > 0;
 
   function handleChange(field: keyof FormState, value: string) {
-    setForm(prev => ({ ...prev, [field]: value }));
+    setForm(prev => {
+      const next = { ...prev, [field]: value };
+      scheduleAutosave(next);
+      return next;
+    });
   }
 
   function handleBlur(field: keyof FormState) {
     setTouched(prev => ({ ...prev, [field]: true }));
+  }
+
+  function handleRestoreDraft() {
+    const draft = loadDraft(walletAddress);
+    if (draft) setForm(draft);
+    setShowRestorePrompt(false);
+  }
+
+  function handleDiscardDraft() {
+    clearDraft(walletAddress);
+    setShowRestorePrompt(false);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -162,6 +243,8 @@ export function CreateProposalForm({ walletAddress, onSuccess, onCancel }: Props
           const returnedId = status.returnValue
             ? Number(status.returnValue.u64().toString())
             : 0;
+          // Clear the draft on successful submission
+          clearDraft(walletAddress);
           onSuccess(returnedId);
           return;
         }
@@ -241,6 +324,60 @@ export function CreateProposalForm({ walletAddress, onSuccess, onCancel }: Props
             ×
           </button>
         </div>
+
+        {/* Restore draft banner */}
+        {showRestorePrompt && (
+          <div
+            role="alert"
+            style={{
+              marginBottom: '1rem',
+              padding: '0.75rem',
+              background: '#eff6ff',
+              border: '1px solid #93c5fd',
+              borderRadius: 6,
+              fontSize: '0.875rem',
+              color: '#1d4ed8',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: '0.5rem',
+            }}
+          >
+            <span>📝 You have a saved draft. Restore it?</span>
+            <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={handleRestoreDraft}
+                style={{
+                  background: '#2563eb',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 4,
+                  padding: '0.25rem 0.75rem',
+                  fontSize: '0.8rem',
+                  cursor: 'pointer',
+                }}
+              >
+                Restore
+              </button>
+              <button
+                type="button"
+                onClick={handleDiscardDraft}
+                style={{
+                  background: 'none',
+                  color: '#64748b',
+                  border: '1px solid #d1d5db',
+                  borderRadius: 4,
+                  padding: '0.25rem 0.75rem',
+                  fontSize: '0.8rem',
+                  cursor: 'pointer',
+                }}
+              >
+                Discard
+              </button>
+            </div>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} noValidate>
           <div style={{ display: 'grid', gap: '1rem' }}>
