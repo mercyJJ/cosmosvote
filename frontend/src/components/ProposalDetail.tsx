@@ -10,12 +10,22 @@
  *     element so screen readers immediately announce the outcome.
  *   - Focus trap and Escape-to-close behaviour are preserved.
  *   - Focus is returned to the triggering element on unmount.
+ *
+ * Issue #15: Real-time tally polling
+ *   - usePolling re-fetches tally data every VITE_TALLY_POLL_INTERVAL ms (default 15 s)
+ *     while the proposal is Active.
+ *   - Polling stops when the component unmounts or the proposal is no longer Active.
+ *   - A "Updated X seconds ago" timestamp is shown in the UI.
  */
 import type { Proposal } from '../types';
-import { fetchHasVoted, fetchVoteRecord } from '../api';
-import { useEffect, useRef, useState } from 'react';
+import { fetchHasVoted, fetchVoteRecord, fetchProposal } from '../api';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { formatTokenAmount, maskAddress } from '../utils';
 import { explorerAccountUrl } from '../config';
+import { usePolling } from '../hooks/usePolling';
+
+/** Polling interval in ms — configurable via VITE_TALLY_POLL_INTERVAL, default 15 s. */
+const TALLY_POLL_INTERVAL = Number(import.meta.env.VITE_TALLY_POLL_INTERVAL ?? 15_000);
 
 interface Props {
   proposal: Proposal;
@@ -53,12 +63,42 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
   const [voteError, setVoteError] = useState<string | null>(null);
   const [showFullProposer, setShowFullProposer] = useState(false);
 
+  // Live tally — starts from the prop and updates via polling
+  const [tally, setTally] = useState<{ yes: bigint; no: bigint; abstain: bigint }>({
+    yes: p.votes_yes,
+    no: p.votes_no,
+    abstain: p.votes_abstain,
+  });
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [secondsAgo, setSecondsAgo] = useState<number | null>(null);
+
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   // Ref to the confirmation message — focus moves here after a successful vote
   const confirmationRef = useRef<HTMLDivElement>(null);
 
   const isProposalActive = p.state === 'Active';
+
+  // Fetch latest tally from chain
+  const fetchTally = useCallback(async () => {
+    const fresh = await fetchProposal(Number(p.id));
+    setTally({ yes: fresh.votes_yes, no: fresh.votes_no, abstain: fresh.votes_abstain });
+    setLastUpdated(new Date());
+  }, [p.id]);
+
+  // Poll every TALLY_POLL_INTERVAL ms while Active
+  usePolling(fetchTally, { interval: TALLY_POLL_INTERVAL, enabled: isProposalActive });
+
+  // Update "X seconds ago" display every second
+  useEffect(() => {
+    if (!lastUpdated) return;
+    const tick = () => {
+      setSecondsAgo(Math.floor((Date.now() - lastUpdated.getTime()) / 1000));
+    };
+    tick();
+    const id = setInterval(tick, 1_000);
+    return () => clearInterval(id);
+  }, [lastUpdated]);
   const now = BigInt(Math.floor(Date.now() / 1000));
   const votingOpen = isProposalActive && now >= p.start_time && now <= p.end_time;
   const canVote = !!walletAddress && votingOpen && hasVoted === false && !isVoting;
@@ -148,7 +188,7 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [onClose, canVote]);  // re-bind when canVote changes so shortcuts stay accurate
 
-  const total = p.votes_yes + p.votes_no + p.votes_abstain;
+  const total = tally.yes + tally.no + tally.abstain;
   const shortAddress = maskAddress(p.proposer);
 
   // Simulated vote submission — real implementation would call castVote via SDK
@@ -238,6 +278,38 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
             ))}
           </tbody>
         </table>
+
+        {/* Live tally — updated via polling while Active */}
+        {isProposalActive && (
+          <div style={{ marginBottom: '1rem', padding: '0.75rem', background: 'var(--bg-vote-cell, #f9fafb)', borderRadius: 8, border: '1px solid var(--border-color, #e5e7eb)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-primary, #1e293b)' }}>Live Tally</span>
+              {secondsAgo !== null && (
+                <span
+                  aria-live="polite"
+                  aria-atomic="true"
+                  style={{ fontSize: '0.75rem', color: 'var(--text-muted, #888)' }}
+                >
+                  Updated {secondsAgo}s ago
+                </span>
+              )}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem', textAlign: 'center' }}>
+              <div>
+                <div style={{ fontSize: '1rem', fontWeight: 700, color: '#16a34a' }}>{formatTokenAmount(tally.yes, decimals)}</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted, #888)' }}>Yes</div>
+              </div>
+              <div>
+                <div style={{ fontSize: '1rem', fontWeight: 700, color: '#dc2626' }}>{formatTokenAmount(tally.no, decimals)}</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted, #888)' }}>No</div>
+              </div>
+              <div>
+                <div style={{ fontSize: '1rem', fontWeight: 700, color: '#6b7280' }}>{formatTokenAmount(tally.abstain, decimals)}</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted, #888)' }}>Abstain</div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── Vote confirmation message (receives focus after vote) ── */}
         {voteConfirmation && (
