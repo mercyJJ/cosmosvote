@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import type { Proposal, ProposalState } from '../types';
 import { formatTokenAmount } from '../utils';
 import styles from './ProposalCard.module.css';
@@ -27,6 +28,64 @@ function totalVotes(p: Proposal): bigint {
 function quorumPct(p: Proposal): number {
   if (p.quorum === 0n) return 0;
   return Math.min(100, Number((totalVotes(p) * 100n) / p.quorum));
+}
+
+/**
+ * Returns a human-readable countdown string for the given Unix timestamp (seconds).
+ * Returns null if the timestamp is in the past (i.e. voting has ended).
+ */
+function getCountdown(endTimeSec: bigint): string | null {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const diffSec = Number(endTimeSec) - nowSec;
+  if (diffSec <= 0) return null;
+
+  const days = Math.floor(diffSec / 86400);
+  const hours = Math.floor((diffSec % 86400) / 3600);
+  const minutes = Math.floor((diffSec % 3600) / 60);
+
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (days === 0) parts.push(`${minutes}m`); // show minutes only when < 1 day
+  return parts.join(' ') + ' remaining';
+}
+
+/**
+ * CountdownTimer renders a live countdown for Active proposals.
+ * Updates every 60 seconds and announces time remaining to screen readers via aria-live.
+ */
+function CountdownTimer({ endTime }: { endTime: bigint }) {
+  const [countdown, setCountdown] = useState<string | null>(() => getCountdown(endTime));
+
+  useEffect(() => {
+    // Refresh immediately on mount, then every 60 s
+    const tick = () => setCountdown(getCountdown(endTime));
+    tick();
+    const id = setInterval(tick, 60_000);
+    return () => clearInterval(id);
+  }, [endTime]);
+
+  if (countdown === null) {
+    return (
+      <span
+        aria-live="polite"
+        aria-label="Voting ended"
+        style={{ color: 'var(--color-state-rejected, #dc2626)', fontWeight: 600 }}
+      >
+        Voting ended
+      </span>
+    );
+  }
+
+  return (
+    <span
+      aria-live="polite"
+      aria-label={`Time remaining: ${countdown}`}
+      title={`Voting ends ${formatDate(endTime)}`}
+    >
+      ⏱ {countdown}
+    </span>
+  );
 }
 
 export function ProposalCard({ proposal: p, decimals, onClick }: Props) {
@@ -74,7 +133,12 @@ export function ProposalCard({ proposal: p, decimals, onClick }: Props) {
       </p>
 
       <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-        Ends {formatDate(p.end_time)} · Quorum {formatTokenAmount(p.quorum, decimals)}
+        {p.state === 'Active' ? (
+          <CountdownTimer endTime={p.end_time} />
+        ) : (
+          <>Ended {formatDate(p.end_time)}</>
+        )}
+        {' '}· Quorum {formatTokenAmount(p.quorum, decimals)}
       </div>
 
       {/* Quorum progress bar */}
@@ -87,4 +151,3 @@ export function ProposalCard({ proposal: p, decimals, onClick }: Props) {
     </article>
   );
 }
-// .
