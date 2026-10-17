@@ -57,6 +57,9 @@ pub enum ContractError {
 
     // Execution
     ExecutionFailed     = 60,
+
+    // Voter cap
+    MaxVotersReached    = 61,
 }
 
 // ---------------------------------------------------------------------------

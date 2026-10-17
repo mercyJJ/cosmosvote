@@ -27,6 +27,8 @@ mod event_tests;
 mod cross_contract_tests;
 #[cfg(test)]
 mod validation_tests;
+#[cfg(test)]
+mod voter_cap_tests;
 
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String, Vec};
 
@@ -78,6 +80,18 @@ pub struct GovernanceContract;
 
 #[contractimpl]
 impl GovernanceContract {
+    /// Maximum number of unique voters per proposal.
+    ///
+    /// A single `cast_vote` transaction is bounded by Soroban's per-transaction
+    /// resource limits (CPU instructions, ledger reads/writes). The per-vote cost
+    /// is ~5 000 000 instructions and ~4 ledger reads/writes. With a per-tx limit
+    /// of 100 000 000 instructions and 40 reads, a single vote comfortably fits.
+    ///
+    /// However, if `finalise()` or any future extension were to iterate over all
+    /// voters in bulk, the cost would scale linearly. `MAX_VOTER_COUNT` caps the
+    /// voter roll at 10 000 to ensure any such extension stays within a safe
+    /// instruction budget. See `docs/gas-budgeting.md` for measurements.
+    pub const MAX_VOTER_COUNT: u32 = 10_000;
     // -----------------------------------------------------------------------
     // Initialization
     // -----------------------------------------------------------------------
@@ -478,6 +492,15 @@ impl GovernanceContract {
 
         GovernanceStorage::set_has_voted(&env, proposal_id, &voter, true);
         GovernanceStorage::set_vote_record(&env, proposal_id, &voter, &VoteRecord { vote: vote.clone(), weight });
+
+        // Enforce the voter cap before incrementing.
+        // cast_vote costs ~5 M instructions and ~4 ledger reads/writes.
+        // Capping at MAX_VOTER_COUNT keeps any future bulk operation in finalise
+        // within Soroban's per-tx resource limits (see docs/gas-budgeting.md).
+        if proposal.voter_count >= Self::MAX_VOTER_COUNT {
+            return Err(ContractError::MaxVotersReached);
+        }
+
         proposal.voter_count += 1;
         GovernanceStorage::set_proposal(&env, proposal_id, &proposal);
 

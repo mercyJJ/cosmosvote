@@ -192,6 +192,7 @@ Vote weight equals the voter's token balance at the proposal's `snapshot_ledger`
 | 24 | `AlreadyVoted` | Voter has already voted on this proposal |
 | 25 | `NoVotingPower` | Voter's balance at snapshot is 0 |
 | 26 | `AdminVoteRestricted` | Admin tried to vote on own proposal with `restrict_admin_vote = true` |
+| 61 | `MaxVotersReached` | Proposal has reached the `MAX_VOTER_COUNT` (10 000) unique voter limit |
 
 **Example**
 
@@ -383,3 +384,4 @@ Read-only accessors for admin address, pending admin (if any), and contract vers
 | 40 | `ContractPaused` | Contract is paused |
 | 41 | `NotPaused` | Contract is not paused |
 | 50 | `ArithmeticOverflow` | Integer overflow |
+| 61 | `MaxVotersReached` | Proposal has reached the `MAX_VOTER_COUNT` (10 000) unique voter limit |

@@ -108,6 +108,7 @@ sequenceDiagram
 | Events | Every state transition emits an on-chain event |
 | Tie handling | Tie (yes == no) results in rejection |
 | Admin vote restriction | When `restrict_admin_vote=true`, admin cannot vote on **any** proposal |
+| Voter count cap | `MAX_VOTER_COUNT = 10 000` — `cast_vote` returns `MaxVotersReached` when exceeded |
 
 ---
 
@@ -123,6 +124,7 @@ sequenceDiagram
 - **Admin controls** — pause/unpause, update quorum, transfer admin privileges
 - **Proposal cooldown** — optional rate limiting per proposer
 - **Minimum balance requirement** — optional minimum tokens to create proposals
+- **Voter count cap** — `MAX_VOTER_COUNT = 10 000` per proposal; prevents gas exhaustion in any future bulk-voter operation
 
 ---
 

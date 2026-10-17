@@ -141,3 +141,31 @@ println!("some_method: {} instructions", consumed);
 - [Soroban SDK — Budget API](https://docs.rs/soroban-sdk/latest/soroban_sdk/struct.Budget.html)
 - [Storage & TTL Strategy](./storage.md)
 - [Performance & Benchmark Baselines](./performance.md)
+
+---
+
+## Voter Count Cap (`MAX_VOTER_COUNT`)
+
+A single `cast_vote` call is O(1): it reads and writes a bounded number of ledger entries regardless of the total number of voters. However, **any future bulk operation over all voters** (e.g., iterating `VoteRecord` entries in `finalise()`) would scale linearly and could exhaust the per-transaction instruction budget.
+
+To guarantee that such extensions remain safe, `cast_vote` enforces a hard cap:
+
+```rust
+pub const MAX_VOTER_COUNT: u32 = 10_000;
+```
+
+Once `proposal.voter_count` reaches `MAX_VOTER_COUNT`, `cast_vote` returns `MaxVotersReached (61)`.
+
+### Gas budget analysis for a bulk-vote iteration at cap
+
+Assuming a bulk loop iterates all 10 000 voters:
+
+| Operation per voter | Est. instructions | Total at 10 000 voters |
+|--------------------|------------------|------------------------|
+| Persistent read (`VoteRecord`) | ~200 000 | ~2 000 000 000 |
+
+This exceeds the 100 000 000 instruction limit, which is why bulk iteration is **not** done in the current `finalise()`. The cap ensures that if such an operation is added in the future, it can be split into bounded batches (e.g., 500 voters per call = ~100 M instructions).
+
+### Raising the cap
+
+If a higher cap is required, the constant can be updated and a fresh gas benchmark run with `cargo test bench_ -- --nocapture`. Any bulk operations must be reviewed for instruction budget compliance before the cap is raised.
