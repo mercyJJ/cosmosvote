@@ -27,6 +27,8 @@ mod event_tests;
 mod cross_contract_tests;
 #[cfg(test)]
 mod validation_tests;
+#[cfg(test)]
+mod restrict_admin_vote_tests;
 
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String, Vec};
 
@@ -404,6 +406,7 @@ impl GovernanceContract {
         if GovernanceStorage::restrict_admin_vote(&env) {
             let admin = GovernanceStorage::admin(&env);
             if voter == admin && proposal.proposer == admin {
+                GovernanceEvents::admin_vote_restricted(&env, proposal_id, &admin, &proposal.proposer);
                 return Err(ContractError::AdminVoteRestricted);
             }
         }

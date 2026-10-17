@@ -167,6 +167,22 @@ impl GovernanceEvents {
         );
     }
 
+    /// Emitted in `cast_vote` when the admin attempts to vote on a proposal
+    /// but is blocked by the `restrict_admin_vote` policy.
+    ///
+    /// Fields: `(proposal_id, admin, proposer)`
+    pub fn admin_vote_restricted(
+        env: &Env,
+        proposal_id: u64,
+        admin: &Address,
+        proposer: &Address,
+    ) {
+        env.events().publish(
+            (symbol_short!("gov"), symbol_short!("adm_blk")),
+            (proposal_id, admin.clone(), proposer.clone()),
+        );
+    }
+
     /// Emitted in `cast_vote` when a voter's weight exceeds the configured
     /// `concentration_threshold_bps` fraction of total supply.
     ///
