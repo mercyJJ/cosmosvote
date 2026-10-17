@@ -627,6 +627,15 @@ Key security properties:
 - Contract pause mechanism for emergency response
 - One-time initialization guard
 
+### Quorum Update Timelock
+
+`update_quorum` is protected by two complementary time-based guards to prevent manipulation:
+
+1. **Early-update window (first 10%)** — quorum can only be updated within the first 10% of the proposal's voting duration. This allows correction of accidental misconfiguration early on.
+2. **End-of-period lock (`QUORUM_TIMELOCK_SECS = 3600`)** — updates are additionally blocked when fewer than 3600 seconds (1 hour) remain before voting closes. This prevents last-minute quorum manipulation.
+
+Any call outside the allowed window returns `ContractError::QuorumUpdateNotAllowed`. See [ADR-007](./docs/adr/ADR-007-update-quorum-timelock.md) for the full rationale.
+
 ---
 
 ## Contributing

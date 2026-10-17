@@ -1123,6 +1123,78 @@ fn test_update_quorum_exceeds_supply_fails() {
 }
 
 // ---------------------------------------------------------------------------
+// Quorum timelock boundary tests (issue #54)
+// ---------------------------------------------------------------------------
+
+/// update_quorum is allowed before the end-of-period timelock window
+#[test]
+fn test_update_quorum_before_timelock_succeeds() {
+    let env = Env::default();
+    let (gov, _, admin, voter, _) = setup(&env);
+    // Proposal duration = 604_800s. Created at t=0, ends at t=604_800.
+    let id = make_proposal(&gov, &env, &voter);
+    // Advance to just before the end-timelock window: end_time - QUORUM_TIMELOCK_SECS - 1
+    // QUORUM_TIMELOCK_SECS = 3600, so we go to t=604_800 - 3601 = 601_199
+    // This is also within the first 10% window (first 60_480 s), so use t=1.
+    env.ledger().set_timestamp(1);
+    gov.update_quorum(&admin, &id, &1_000_000i128);
+    let proposal = gov.get_proposal(&id);
+    assert_eq!(proposal.quorum, 1_000_000);
+}
+
+/// update_quorum is blocked when fewer than QUORUM_TIMELOCK_SECS remain
+#[test]
+fn test_update_quorum_within_timelock_fails() {
+    let env = Env::default();
+    let (gov, _, admin, voter, _) = setup(&env);
+    // Proposal duration = 604_800s. Created at t=0, ends at t=604_800.
+    let id = make_proposal(&gov, &env, &voter);
+    // Advance into the end-timelock window: end_time - (QUORUM_TIMELOCK_SECS - 1)
+    // = 604_800 - 3_599 = 601_201  — still within first 10% window? No.
+    // First 10% window ends at t=60_480. We need to be inside first 10%
+    // but also inside the 1-hour end-lock. Use a very short proposal instead.
+    // With duration=60s: first 10% = 6s, end-lock = last 3600s > duration.
+    // Actually: use a proposal with duration exactly 7200s so first 10% = 720s
+    // and end-lock = last 3600s. Advance to t=3601 (inside first 10% window
+    // but end_time - now = 7200 - 3601 = 3599 < 3600).
+    let id2 = gov.create_proposal(
+        &voter,
+        &String::from_str(&env, "Short Proposal"),
+        &String::from_str(&env, "A proposal with short enough duration for timelock test"),
+        &5_000_000i128,
+        &7_200u64,
+        &None,
+        &None,
+    );
+    env.ledger().set_timestamp(3_601);
+    let result = gov.try_update_quorum(&admin, &id2, &1_000_000i128);
+    assert_eq!(result, Err(Ok(ContractError::QuorumUpdateNotAllowed)));
+}
+
+/// update_quorum is blocked exactly at the boundary (end_time - now == QUORUM_TIMELOCK_SECS - 1)
+#[test]
+fn test_update_quorum_at_exact_timelock_boundary_fails() {
+    let env = Env::default();
+    let (gov, _, admin, voter, _) = setup(&env);
+    // Use a 7200s proposal: end_time = 7200, first 10% window = 0..720
+    let id = gov.create_proposal(
+        &voter,
+        &String::from_str(&env, "Boundary Proposal"),
+        &String::from_str(&env, "A proposal to test the exact timelock boundary condition"),
+        &5_000_000i128,
+        &7_200u64,
+        &None,
+        &None,
+    );
+    // Advance to exactly end_time - QUORUM_TIMELOCK_SECS = 7200 - 3600 = 3600
+    // time remaining == 3600 which is NOT < 3600, so it should still be blocked
+    // by the first-10%-window check (3600 > 720).
+    env.ledger().set_timestamp(3_600);
+    let result = gov.try_update_quorum(&admin, &id, &1_000_000i128);
+    assert_eq!(result, Err(Ok(ContractError::QuorumUpdateNotAllowed)));
+}
+
+// ---------------------------------------------------------------------------
 // Admin vote restriction tests
 // ---------------------------------------------------------------------------
 

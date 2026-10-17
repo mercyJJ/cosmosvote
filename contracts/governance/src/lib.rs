@@ -11,6 +11,14 @@ mod events;
 mod storage;
 mod types;
 
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Minimum seconds remaining in the voting period required to update quorum.
+/// Prevents last-minute quorum manipulation within 1 hour of finalization.
+const QUORUM_TIMELOCK_SECS: u64 = 3_600;
+
 #[cfg(test)]
 mod test;
 #[cfg(test)]
@@ -766,11 +774,17 @@ impl GovernanceContract {
             return Err(ContractError::ProposalNotActive);
         }
 
-        // Time-lock: only allowed within the first 10% of the voting period.
+        // Time-lock: only allowed within the first 10% of the voting period
+        // AND at least QUORUM_TIMELOCK_SECS before the end.
+        // This prevents both late-stage manipulation and last-minute changes.
         let now = env.ledger().timestamp();
         let duration = proposal.end_time.saturating_sub(proposal.start_time);
         let window = duration / 10;
         if now > proposal.start_time + window {
+            return Err(ContractError::QuorumUpdateNotAllowed);
+        }
+        // Block updates within the final QUORUM_TIMELOCK_SECS of the voting period.
+        if proposal.end_time.saturating_sub(now) < QUORUM_TIMELOCK_SECS {
             return Err(ContractError::QuorumUpdateNotAllowed);
         }
 
