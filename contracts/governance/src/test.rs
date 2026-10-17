@@ -129,6 +129,90 @@ fn test_get_config() {
     assert_eq!(config.paused, false);
 }
 
+/// Verifies that get_config returns all configuration values exactly as passed to initialize.
+/// Closes issue #69.
+#[test]
+fn test_get_config_matches_initialize_params() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let voter = Address::generate(&env);
+
+    let token_id = env.register(TokenContract, ());
+    let token = TokenContractClient::new(&env, &token_id);
+    token.initialize(
+        &admin,
+        &1_000_000_000i128,
+        &String::from_str(&env, "CosmosVote"),
+        &String::from_str(&env, "VOTE"),
+        &7u32,
+    );
+    token.mint(&admin, &voter, &10_000_000i128);
+
+    let gov_id = env.register(GovernanceContract, ());
+    let gov = GovernanceContractClient::new(&env, &gov_id);
+
+    let min_balance: i128 = 500_000;
+    let cooldown: u64 = 3_600;
+    let min_quorum_bps: u32 = 200; // 2%
+    let restrict_admin_vote: bool = true;
+    let concentration_threshold_bps: u32 = 5_000; // 50%
+
+    gov.initialize(
+        &admin,
+        &token_id,
+        &min_balance,
+        &cooldown,
+        &min_quorum_bps,
+        &restrict_admin_vote,
+        &None,
+        &concentration_threshold_bps,
+    );
+
+    let config = gov.get_config();
+
+    // Every field returned by get_config must match the value passed to initialize.
+    assert_eq!(config.admin, admin, "admin mismatch");
+    assert_eq!(config.voting_token, token_id, "voting_token mismatch");
+    assert_eq!(config.min_proposal_balance, min_balance, "min_proposal_balance mismatch");
+    assert_eq!(config.proposal_cooldown, cooldown, "proposal_cooldown mismatch");
+    assert_eq!(config.restrict_admin_vote, restrict_admin_vote, "restrict_admin_vote mismatch");
+    assert_eq!(config.paused, false, "contract should not be paused on init");
+}
+
+/// Verifies that get_config is callable without any authentication (no auth required).
+/// Closes issue #69.
+#[test]
+fn test_get_config_no_auth_required() {
+    let env = Env::default();
+    // Deliberately do NOT call env.mock_all_auths()
+    let admin = Address::generate(&env);
+    let voter = Address::generate(&env);
+
+    let token_id = env.register(TokenContract, ());
+    let token = TokenContractClient::new(&env, &token_id);
+    // token.initialize requires auth — use mock only for setup
+    env.mock_all_auths();
+    token.initialize(
+        &admin,
+        &1_000_000_000i128,
+        &String::from_str(&env, "CosmosVote"),
+        &String::from_str(&env, "VOTE"),
+        &7u32,
+    );
+    token.mint(&admin, &voter, &10_000_000i128);
+
+    let gov_id = env.register(GovernanceContract, ());
+    let gov = GovernanceContractClient::new(&env, &gov_id);
+    gov.initialize(&admin, &token_id, &0i128, &0u64, &0u32, &false, &None, &0u32);
+
+    // get_config should succeed without any auth
+    let config = gov.get_config();
+    assert_eq!(config.admin, admin);
+    assert_eq!(config.paused, false);
+}
+
 #[test]
 fn test_min_balance_blocks_underfunded_proposer() {
     let env = Env::default();

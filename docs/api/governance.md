@@ -54,9 +54,29 @@ gov.initialize(
 pub fn get_config(env: Env) -> GovernanceConfig
 ```
 
-Returns the current governance configuration as a `GovernanceConfig` struct.
+Returns the current governance configuration as a `GovernanceConfig` struct. This function requires no authentication and is callable by anyone (off-chain monitors, frontends, bots).
 
-**Returns:** `GovernanceConfig { admin, voting_token, min_proposal_balance, proposal_cooldown, restrict_admin_vote, paused }`
+**Returns:** `GovernanceConfig`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `admin` | `Address` | Current privileged admin address |
+| `voting_token` | `Address` | SEP-41 governance token contract address |
+| `min_proposal_balance` | `i128` | Minimum token balance required to create a proposal (`0` = no minimum) |
+| `proposal_cooldown` | `u64` | Minimum seconds between proposals per address (`0` = no cooldown) |
+| `restrict_admin_vote` | `bool` | If `true`, admin cannot vote on own proposals |
+| `paused` | `bool` | Whether the contract is currently paused |
+
+**Authentication:** None — this is a read-only query callable without auth.
+
+**Example**
+
+```rust
+let config = gov.get_config();
+assert_eq!(config.admin, admin_address);
+assert_eq!(config.min_proposal_balance, 1_000_000i128);
+assert_eq!(config.paused, false);
+```
 
 ---
 
