@@ -38,7 +38,32 @@ export default function App() {
   const [selected, setSelected] = useState<Proposal | null>(null);
   const [rpcWarning, setRpcWarning] = useState<string | null>(null);
   const [showFullAddress, setShowFullAddress] = useState(false);
-  const [page, setPage] = useState(1);
+
+  // ── URL-synced page state (Issue #19) ────────────────────────────────────
+  // Initialise from ?page= so deep-linking to a specific page works.
+  const [page, setPage] = useState(() => {
+    const sp = new URLSearchParams(window.location.search);
+    return Number(sp.get('page') ?? 1) || 1;
+  });
+
+  // Sync page to URL without causing a navigation (replaceState)
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    if (page > 1) sp.set('page', String(page)); else sp.delete('page');
+    const newSearch = sp.toString();
+    window.history.replaceState(null, '', newSearch ? `?${newSearch}` : window.location.pathname);
+  }, [page]);
+
+  // Restore page on popstate (browser back/forward)
+  useEffect(() => {
+    const onPop = () => {
+      const sp = new URLSearchParams(window.location.search);
+      setPage(Number(sp.get('page') ?? 1) || 1);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+  // ────────────────────────────────────────────────────────────────────────
   const triggerRef = useRef<HTMLElement>(null);
   // Preserve scroll position when opening/closing proposal detail views
   const scrollPositionRef = useRef<number>(0);
@@ -98,6 +123,15 @@ export default function App() {
     return filtered.slice(start, start + PAGE_SIZE);
   }, [filtered, safePage]);
 
+  // AriaLive page-change announcement (Issue #19)
+  const [pageAnnouncement, setPageAnnouncement] = useState('');
+
+  const goToPage = (next: number) => {
+    setPage(next);
+    setPageAnnouncement(`Page ${next} of ${totalPages}`);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const handleProposalCreated = (id: number) => {
     setAnnouncement(`Proposal #${id} created. Refreshing list…`);
     fetchAllProposals().then(setProposals).catch(() => {});
@@ -105,7 +139,7 @@ export default function App() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#f8fafc', fontFamily: 'system-ui, sans-serif' }}>
-      <AriaLive polite={announcement} assertive={error ?? undefined} />
+      <AriaLive polite={announcement || pageAnnouncement} assertive={error ?? undefined} />
 
       {/* Header */}
       <header style={{ background: 'var(--bg-header)', color: 'var(--text-header)', padding: '1rem 2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
@@ -242,14 +276,9 @@ export default function App() {
               totalPages={totalPages}
               totalCount={filtered.length}
               pageSize={PAGE_SIZE}
-              onPrev={() => {
-                setPage(p => Math.max(1, p - 1));
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-              onNext={() => {
-                setPage(p => Math.min(totalPages, p + 1));
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
+              onPrev={() => goToPage(Math.max(1, safePage - 1))}
+              onNext={() => goToPage(Math.min(totalPages, safePage + 1))}
+              onPage={goToPage}
             />
           )}
         </main>
