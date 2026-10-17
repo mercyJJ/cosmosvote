@@ -26,6 +26,7 @@
 import nodemailer from 'nodemailer';
 import axios from 'axios';
 import type { GovernanceEvent, Subscriber } from './types';
+import { renderEmailNotification } from './emailTemplates';
 
 // ── Plugin interface ──────────────────────────────────────────────────────────
 
@@ -90,11 +91,13 @@ export const EmailChannel: NotificationChannel = {
 
   async send(subscriber, event) {
     if (!subscriber.email) return;
+    const email = renderEmailNotification(event);
     await transporter.sendMail({
       from: process.env.EMAIL_FROM,
       to: subscriber.email,
       subject: buildSubjectLine(event),
-      text: buildTextMessage(event),
+      text: email.text,
+      html: email.html,
     });
   },
 };
