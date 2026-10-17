@@ -6,6 +6,23 @@
     <title>CosmosVote — Governance</title>
     <meta name="description" content="On-chain governance and voting on Stellar Soroban" />
     <link rel="manifest" href="/manifest.json" />
+    <!--
+      No-flash theme script (Issue #18):
+      Reads localStorage before React hydrates so the correct data-theme is
+      applied immediately, preventing a flash of the wrong theme on load.
+    -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem('cosmosvote-theme');
+          if (stored === 'light' || stored === 'dark') {
+            document.documentElement.setAttribute('data-theme', stored);
+          } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            document.documentElement.setAttribute('data-theme', 'dark');
+          }
+        } catch (_) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="install-banner" style="display:none;position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);background:#1e293b;color:#e2e8f0;padding:.75rem 1.25rem;border-radius:.5rem;font-family:system-ui,sans-serif;font-size:.9rem;z-index:9999;display:none;gap:.75rem;align-items:center;box-shadow:0 4px 16px rgba(0,0,0,.4);">

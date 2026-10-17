@@ -120,9 +120,25 @@ export default function App() {
           <button
             onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
             aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-            style={{ background: 'none', border: '1px solid var(--text-header-sub)', borderRadius: 6, padding: '0.4rem 0.6rem', cursor: 'pointer', color: 'var(--text-header)', fontSize: '1rem', lineHeight: 1 }}
+            aria-pressed={theme === 'dark'}
+            style={{
+              background: 'none',
+              border: '1px solid var(--text-header-sub)',
+              borderRadius: 6,
+              padding: '0.4rem 0.6rem',
+              cursor: 'pointer',
+              color: 'var(--text-header)',
+              fontSize: '1rem',
+              lineHeight: 1,
+              outline: 'none',
+            }}
+            onFocus={e => { (e.currentTarget as HTMLButtonElement).style.outline = '2px solid #60a5fa'; (e.currentTarget as HTMLButtonElement).style.outlineOffset = '2px'; }}
+            onBlur={e => { (e.currentTarget as HTMLButtonElement).style.outline = 'none'; }}
           >
             {theme === 'dark' ? '☀️' : '🌙'}
+            <span style={{ marginLeft: '0.3rem', fontSize: '0.75rem' }}>
+              {theme === 'dark' ? 'Light' : 'Dark'}
+            </span>
           </button>
           {walletAddress ? (
             <div style={{ textAlign: 'right' }}>
