@@ -16,6 +16,7 @@ import { fetchHasVoted, fetchVoteRecord } from '../api';
 import { useEffect, useRef, useState } from 'react';
 import { formatTokenAmount, maskAddress } from '../utils';
 import { explorerAccountUrl } from '../config';
+import { VoteSimulationPreview } from './VoteSimulationPreview';
 
 interface Props {
   proposal: Proposal;
@@ -358,6 +359,17 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
           <div style={{ padding: '0.75rem', background: '#fef3c7', borderRadius: 8, fontSize: '0.875rem', color: '#92400e' }}>
             ℹ️ Connect your wallet to vote on this proposal
           </div>
+        )}
+
+        {/* ── Vote Simulation Preview (Active proposals only) ── */}
+        {/* Rendered for Active proposals regardless of wallet connection so
+            users can see an estimate before connecting. When walletAddress is
+            present the preview reflects the user's pending vote in real time. */}
+        {isProposalActive && walletAddress && hasVoted === false && (
+          <VoteSimulationPreview
+            proposalId={Number(p.id)}
+            walletAddress={walletAddress}
+          />
         )}
 
         {/* Already voted confirmation (when loaded from chain, not just submitted) */}
