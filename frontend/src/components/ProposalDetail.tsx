@@ -12,10 +12,12 @@
  *   - Focus is returned to the triggering element on unmount.
  */
 import type { Proposal } from '../types';
-import { fetchHasVoted, fetchVoteRecord } from '../api';
+import { castVote, fetchHasVoted, fetchVoteRecord } from '../api';
+import type { VoteInput } from '../api';
 import { useEffect, useRef, useState } from 'react';
 import { formatTokenAmount, maskAddress } from '../utils';
 import { explorerAccountUrl } from '../config';
+import { useWallet } from '../WalletContext';
 
 interface Props {
   proposal: Proposal;
@@ -46,12 +48,17 @@ const VOTE_CONFIG: Array<{
 ];
 
 export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddress, onClose, triggerRef }: Props) {
+  // Get signTransaction from the wallet store so votes can be signed by the real wallet.
+  const { signTransaction } = useWallet();
+
   const [hasVoted, setHasVoted] = useState<boolean | null>(null);
   const [voteRecord, setVoteRecord] = useState<{ vote: string; weight: bigint } | null>(null);
   const [isVoting, setIsVoting] = useState(false);
   const [voteConfirmation, setVoteConfirmation] = useState<string | null>(null);
   const [voteError, setVoteError] = useState<string | null>(null);
   const [showFullProposer, setShowFullProposer] = useState(false);
+  // For multi-choice proposals: the index the user has selected (null = none selected yet)
+  const [selectedChoiceIndex, setSelectedChoiceIndex] = useState<number | null>(null);
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -150,19 +157,23 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
 
   const total = p.votes_yes + p.votes_no + p.votes_abstain;
   const shortAddress = maskAddress(p.proposer);
+  const hasChoices = Array.isArray(p.choices) && p.choices.length > 0;
 
-  // Simulated vote submission — real implementation would call castVote via SDK
-  async function handleVote(voteType: VoteChoice) {
-    if (!canVote) return;
+  // Submit a vote via the connected wallet. Signs and broadcasts a real Soroban transaction.
+  async function handleVote(voteInput: VoteInput) {
+    if (!canVote || !walletAddress) return;
     setIsVoting(true);
     setVoteError(null);
     setVoteConfirmation(null);
     try {
-      // Placeholder: actual SDK castVote call would go here
-      await new Promise<void>(res => setTimeout(res, 800));
+      await castVote(walletAddress, Number(p.id), voteInput, signTransaction);
       setHasVoted(true);
-      setVoteRecord({ vote: voteType, weight: BigInt(0) });
-      setVoteConfirmation(`Your vote "${voteType}" on proposal #${String(p.id)} has been submitted.`);
+      const voteLabel =
+        typeof voteInput === 'object' && 'choice' in voteInput
+          ? (p.choices?.[voteInput.choice] ?? `Choice ${voteInput.choice}`)
+          : voteInput;
+      setVoteRecord({ vote: voteLabel, weight: BigInt(0) });
+      setVoteConfirmation(`Your vote "${voteLabel}" on proposal #${String(p.id)} has been submitted.`);
     } catch (e) {
       setVoteError(`Vote failed: ${e instanceof Error ? e.message : 'unknown error'}`);
     } finally {
@@ -285,38 +296,115 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
 
             {hasVoted === false && isProposalActive && (
               <>
-                {/* Keyboard shortcut hint */}
-                <p
-                  id="vote-shortcut-hint"
-                  style={{ margin: '0 0 0.5rem', color: '#374151' }}
-                >
-                  Cast your vote{' '}
-                  <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>
-                    (keyboard shortcuts: <kbd>Y</kbd> Yes · <kbd>N</kbd> No · <kbd>A</kbd> Abstain)
-                  </span>
-                </p>
+                {hasChoices ? (
+                  /* ── Multi-choice vote UI ── */
+                  <fieldset
+                    style={{ border: 'none', padding: 0, margin: 0 }}
+                    aria-labelledby="choice-legend"
+                    disabled={!canVote || isVoting}
+                  >
+                    <legend
+                      id="choice-legend"
+                      style={{ margin: '0 0 0.5rem', color: '#374151', fontWeight: 500, fontSize: '0.875rem' }}
+                    >
+                      Select your choice:
+                    </legend>
+                    <ul
+                      role="radiogroup"
+                      aria-labelledby="choice-legend"
+                      style={{ listStyle: 'none', padding: 0, margin: '0 0 0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}
+                    >
+                      {(p.choices ?? []).map((choiceLabel, idx) => {
+                        const inputId = `choice-${String(p.id)}-${idx}`;
+                        const isSelected = selectedChoiceIndex === idx;
+                        return (
+                          <li key={idx}>
+                            <label
+                              htmlFor={inputId}
+                              style={{
+                                display: 'flex', alignItems: 'center', gap: '0.5rem',
+                                padding: '0.6rem 0.75rem',
+                                border: `2px solid ${isSelected ? '#2563eb' : '#e5e7eb'}`,
+                                borderRadius: 6,
+                                cursor: canVote && !isVoting ? 'pointer' : 'not-allowed',
+                                background: isSelected ? '#eff6ff' : '#fff',
+                                fontSize: '0.875rem',
+                              }}
+                            >
+                              <input
+                                id={inputId}
+                                type="radio"
+                                name={`proposal-${String(p.id)}-choice`}
+                                value={idx}
+                                checked={isSelected}
+                                disabled={!canVote || isVoting}
+                                onChange={() => setSelectedChoiceIndex(idx)}
+                                aria-label={choiceLabel}
+                                style={{ accentColor: '#2563eb' }}
+                              />
+                              {choiceLabel}
+                            </label>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    <button
+                      onClick={() => {
+                        if (selectedChoiceIndex !== null) {
+                          void handleVote({ choice: selectedChoiceIndex });
+                        }
+                      }}
+                      disabled={!canVote || isVoting || selectedChoiceIndex === null}
+                      aria-disabled={!canVote || isVoting || selectedChoiceIndex === null}
+                      style={{
+                        padding: '0.6rem 1.25rem',
+                        background: !canVote || isVoting || selectedChoiceIndex === null ? '#e5e7eb' : '#2563eb',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: 6,
+                        cursor: !canVote || isVoting || selectedChoiceIndex === null ? 'not-allowed' : 'pointer',
+                        fontWeight: 600,
+                        fontSize: '0.875rem',
+                      }}
+                    >
+                      {isVoting ? 'Submitting…' : 'Submit Vote'}
+                    </button>
+                  </fieldset>
+                ) : (
+                  /* ── Standard Yes / No / Abstain vote UI ── */
+                  <>
+                    {/* Keyboard shortcut hint */}
+                    <p
+                      id="vote-shortcut-hint"
+                      style={{ margin: '0 0 0.5rem', color: '#374151' }}
+                    >
+                      Cast your vote{' '}
+                      <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+                        (keyboard shortcuts: <kbd>Y</kbd> Yes · <kbd>N</kbd> No · <kbd>A</kbd> Abstain)
+                      </span>
+                    </p>
 
-                {/* Vote buttons */}
-                <div
-                  role="group"
-                  aria-labelledby="vote-shortcut-hint"
-                  style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem' }}
-                >
-                  {VOTE_CONFIG.map(({ vote, label, shortcut, emoji, color, shortcutKey }) => {
-                    const isCurrentVote = voteRecord?.vote === vote;
-                    const isDisabled = !canVote;
+                    {/* Vote buttons */}
+                    <div
+                      role="group"
+                      aria-labelledby="vote-shortcut-hint"
+                      style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem' }}
+                    >
+                      {VOTE_CONFIG.map(({ vote, label, shortcut, emoji, color, shortcutKey }) => {
+                        const isCurrentVote = voteRecord?.vote === vote;
+                        const isDisabled = !canVote;
 
-                    return (
-                      <button
-                        key={vote}
-                        onClick={() => void handleVote(vote)}
-                        // aria-pressed reflects whether this choice is the user's current vote
-                        aria-pressed={isCurrentVote}
-                        // aria-disabled communicates the disabled state to screen readers
-                        // without removing the button from the tab order
-                        aria-disabled={isDisabled || isVoting}
-                        // Keyboard shortcut documented for AT users
-                        aria-keyshortcuts={shortcutKey}
+                        return (
+                          <button
+                            key={vote}
+                            onClick={() => void handleVote(vote)}
+                            // aria-pressed reflects whether this choice is the user's current vote
+                            aria-pressed={isCurrentVote}
+                            // aria-disabled communicates the disabled state to screen readers
+                            // without removing the button from the tab order
+                            aria-disabled={isDisabled || isVoting}
+                            // Keyboard shortcut documented for AT users
+                            aria-keyshortcuts={shortcutKey}
                         // Tooltip explains shortcut and disabled reason
                         title={
                           isVoting
@@ -348,6 +436,8 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
                     );
                   })}
                 </div>
+                  </>
+                )}
               </>
             )}
           </div>

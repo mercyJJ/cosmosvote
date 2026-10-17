@@ -16,6 +16,15 @@ export interface Proposal {
   start_time: bigint;
   end_time: bigint;
   state: ProposalState;
+  /**
+   * Optional named choices for multi-choice proposals.
+   * When non-empty, the frontend renders a choice list instead of the
+   * standard Yes / No / Abstain buttons, and submits Vote::Choice(index)
+   * to the contract.
+   *
+   * Issue #14: Add multi-choice proposal voting UI.
+   */
+  choices?: string[];
 }
 
 export interface VoteRecord {
