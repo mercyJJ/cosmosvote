@@ -13,6 +13,7 @@ import { formatTokenAmount, maskAddress } from './utils';
 import { useTheme } from './useTheme';
 import { useMeta } from './useMeta';
 import { useWallet } from './WalletContext';
+import { usePWAInstall } from './usePWAInstall';
 import './responsive.css';
 
 const ALL_STATES: ProposalState[] = ['Active', 'Passed', 'Rejected', 'Executed', 'Cancelled'];
@@ -42,6 +43,8 @@ export default function App() {
   const triggerRef = useRef<HTMLElement>(null);
   // Preserve scroll position when opening/closing proposal detail views
   const scrollPositionRef = useRef<number>(0);
+  // PWA install prompt — wired to the beforeinstallprompt event (Issue #24)
+  const { canInstall, install, dismiss } = usePWAInstall();
 
   useMeta(
     selected ? selected.title : 'Proposals',
@@ -117,6 +120,14 @@ export default function App() {
           <a href="/faucet" style={{ color: 'var(--text-header)', fontSize: '0.875rem' }}>Get Test Tokens</a>
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          {/* PWA install banner — shown on supported browsers (Issue #24) */}
+          {canInstall && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(74,144,226,0.15)', border: '1px solid #4A90E2', borderRadius: 6, padding: '0.25rem 0.6rem' }}>
+              <span style={{ fontSize: '0.8rem' }}>📲</span>
+              <button onClick={install} style={{ background: '#4A90E2', color: '#fff', border: 'none', borderRadius: 4, padding: '0.3rem 0.7rem', cursor: 'pointer', fontSize: '0.75rem' }}>Install</button>
+              <button onClick={dismiss} aria-label="Dismiss install prompt" style={{ background: 'none', border: 'none', color: 'var(--text-header-sub)', cursor: 'pointer', fontSize: '0.85rem', padding: '0 0.2rem' }}>✕</button>
+            </div>
+          )}
           <button
             onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
             aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
