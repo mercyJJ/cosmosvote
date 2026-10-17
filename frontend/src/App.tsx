@@ -8,11 +8,13 @@ import { Pagination } from './components/Pagination';
 import { ConnectWalletModal } from './components/ConnectWalletModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AriaLive } from './components/AriaLive';
+import { GovernanceAnalytics } from './components/GovernanceAnalytics';
 import { ACTIVE_NETWORK } from './config';
 import { formatTokenAmount, maskAddress } from './utils';
 import { useTheme } from './useTheme';
 import { useMeta } from './useMeta';
 import { useWallet } from './WalletContext';
+import { useProposalStore } from './store/proposalStore';
 import './responsive.css';
 
 const ALL_STATES: ProposalState[] = ['Active', 'Passed', 'Rejected', 'Executed', 'Cancelled'];
@@ -25,6 +27,13 @@ export default function App() {
   // Wallet state comes exclusively from WalletContext (backed by Zustand walletStore).
   // No local wallet state duplicates are created here.
   const { walletAddress, tokenBalance, showModal, openModal, disconnect } = useWallet();
+
+  // votedMap from proposalStore (keyed by string id); convert to bigint keys for analytics
+  const storeVotedMap = useProposalStore(s => s.votedMap);
+  const votedMapBigInt = useMemo(
+    () => new Map(Array.from(storeVotedMap.entries()).map(([k, v]) => [BigInt(k), v])),
+    [storeVotedMap],
+  );
 
   const { theme, setTheme } = useTheme();
   const [proposals, setProposals] = useState<Proposal[]>([]);
@@ -250,6 +259,18 @@ export default function App() {
                 setPage(p => Math.min(totalPages, p + 1));
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
+            />
+          )}
+
+          {/* ── Governance Analytics (Issue #129) ── */}
+          {!loading && proposals.length > 0 && (
+            <GovernanceAnalytics
+              proposals={proposals}
+              decimals={decimals}
+              votedMap={votedMapBigInt}
+              onRefresh={() =>
+                fetchAllProposals().then(setProposals).catch(() => {})
+              }
             />
           )}
         </main>
