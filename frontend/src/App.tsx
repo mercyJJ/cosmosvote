@@ -1,9 +1,12 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import type { Proposal, ProposalState } from './types';
+import type { Proposal, ProposalState, VoteRecord } from './types';
 import { fetchAllProposals, fetchTokenDecimals, checkRpcReachability } from './api';
 import { ProposalCard } from './components/ProposalCard';
 import { ProposalSkeleton } from './components/ProposalSkeleton';
 import { ProposalDetail } from './components/ProposalDetail';
+import { UserDashboard } from './components/UserDashboard';
+import { DashboardSkeleton } from './components/DashboardSkeleton';
+import { TreasurySkeleton } from './components/TreasurySkeleton';
 import { Pagination } from './components/Pagination';
 import { ConnectWalletModal } from './components/ConnectWalletModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -20,6 +23,8 @@ const PAGE_SIZE = 20;
 
 // Admin address — in production this would come from the contract or environment config
 const ADMIN_ADDRESS = import.meta.env.VITE_ADMIN_ADDRESS ?? null;
+
+type AppTab = 'proposals' | 'dashboard' | 'treasury';
 
 export default function App() {
   // Wallet state comes exclusively from WalletContext (backed by Zustand walletStore).
@@ -39,6 +44,13 @@ export default function App() {
   const [rpcWarning, setRpcWarning] = useState<string | null>(null);
   const [showFullAddress, setShowFullAddress] = useState(false);
   const [page, setPage] = useState(1);
+  // Tab navigation — proposals / dashboard / treasury
+  const [activeTab, setActiveTab] = useState<AppTab>('proposals');
+  // Loading states for dashboard and treasury tabs
+  const [loadingDashboard, setLoadingDashboard] = useState(false);
+  const [loadingTreasury, setLoadingTreasury] = useState(false);
+  // voted map: proposalId → VoteRecord
+  const [votedMap] = useState<Map<bigint, VoteRecord>>(new Map());
   const triggerRef = useRef<HTMLElement>(null);
   // Preserve scroll position when opening/closing proposal detail views
   const scrollPositionRef = useRef<number>(0);
@@ -103,6 +115,26 @@ export default function App() {
     fetchAllProposals().then(setProposals).catch(() => {});
   };
 
+  // Simulate loading state transitions for dashboard and treasury tabs.
+  // In production these would drive real fetch calls (e.g. fetchVoteHistory,
+  // fetchTreasuryBalance). The skeleton is shown while loadingDashboard /
+  // loadingTreasury is true.
+  useEffect(() => {
+    if (activeTab === 'dashboard' && walletAddress) {
+      setLoadingDashboard(true);
+      const t = setTimeout(() => setLoadingDashboard(false), 600);
+      return () => clearTimeout(t);
+    }
+  }, [activeTab, walletAddress]);
+
+  useEffect(() => {
+    if (activeTab === 'treasury') {
+      setLoadingTreasury(true);
+      const t = setTimeout(() => setLoadingTreasury(false), 600);
+      return () => clearTimeout(t);
+    }
+  }, [activeTab]);
+
   return (
     <div style={{ minHeight: '100vh', background: '#f8fafc', fontFamily: 'system-ui, sans-serif' }}>
       <AriaLive polite={announcement} assertive={error ?? undefined} />
@@ -162,6 +194,73 @@ export default function App() {
 
       <ErrorBoundary>
         <main style={{ maxWidth: 900, margin: '0 auto', padding: '2rem 1rem' }}>
+
+          {/* ── Tab navigation ── */}
+          <nav
+            aria-label="App sections"
+            style={{ display: 'flex', gap: '0.25rem', marginBottom: '1.5rem', borderBottom: '2px solid var(--border-color, #e2e8f0)' }}
+          >
+            {([
+              { id: 'proposals', label: '📋 Proposals' },
+              ...(walletAddress ? [{ id: 'dashboard', label: '👤 Dashboard' }] : []),
+              { id: 'treasury', label: '🏦 Treasury' },
+            ] as Array<{ id: AppTab; label: string }>).map(tab => (
+              <button
+                key={tab.id}
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  borderBottom: activeTab === tab.id ? '2px solid #2563eb' : '2px solid transparent',
+                  marginBottom: -2,
+                  padding: '0.6rem 1rem',
+                  cursor: 'pointer',
+                  fontWeight: activeTab === tab.id ? 700 : 400,
+                  color: activeTab === tab.id ? '#2563eb' : 'var(--text-muted, #64748b)',
+                  fontSize: '0.875rem',
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+
+          {/* ── Dashboard tab ── */}
+          {activeTab === 'dashboard' && walletAddress && (
+            loadingDashboard
+              ? <DashboardSkeleton />
+              : (
+                <UserDashboard
+                  walletAddress={walletAddress}
+                  tokenBalance={tokenBalance}
+                  decimals={decimals}
+                  proposals={proposals}
+                  votedMap={votedMap}
+                  onCreateProposal={() => setActiveTab('proposals')}
+                  onDisconnect={disconnect}
+                />
+              )
+          )}
+
+          {/* ── Treasury tab ── */}
+          {activeTab === 'treasury' && (
+            loadingTreasury
+              ? <TreasurySkeleton />
+              : (
+                <div
+                  style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, padding: '1.5rem', textAlign: 'center', color: '#64748b', fontSize: '0.875rem' }}
+                  aria-label="Treasury"
+                >
+                  <p>💼 Treasury data will appear here once the treasury contract is configured.</p>
+                </div>
+              )
+          )}
+
+          {/* ── Proposals tab ── */}
+          {activeTab === 'proposals' && (
+            <>
           <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
             <input
               type="search"
@@ -251,6 +350,8 @@ export default function App() {
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
             />
+          )}
+            </>
           )}
         </main>
       </ErrorBoundary>
