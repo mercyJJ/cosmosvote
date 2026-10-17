@@ -1,0 +1,225 @@
+/* MyVotes.module.css — Voter history section */
+
+.container {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e2e8f0;
+}
+
+/* ── Header ── */
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.heading {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+/* ── Filter row ── */
+.filterRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.filterBtn {
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.7rem;
+  cursor: pointer;
+  color: #475569;
+  transition: background 0.15s, color 0.15s;
+}
+
+.filterBtn:hover {
+  background: #e2e8f0;
+}
+
+.filterBtnActive {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+  font-weight: 600;
+}
+
+/* ── Vote list ── */
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid #f1f5f9;
+  font-size: 0.8rem;
+  color: #374151;
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+/* ── Title cell ── */
+.titleCell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.proposalId {
+  font-size: 0.65rem;
+  color: #94a3b8;
+}
+
+.proposalTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+/* ── Vote cell ── */
+.voteCell {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  flex-shrink: 0;
+}
+
+.voteIcon {
+  font-size: 0.875rem;
+  line-height: 1;
+}
+
+.voteLabel {
+  font-weight: 600;
+  font-size: 0.75rem;
+}
+
+/* ── Weight cell ── */
+.weightCell {
+  color: #64748b;
+  font-size: 0.72rem;
+  flex-shrink: 0;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* ── Badge cell ── */
+.badgeCell {
+  flex-shrink: 0;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--badge-color, #64748b) 12%, white);
+  color: var(--badge-color, #64748b);
+  border: 1px solid color-mix(in srgb, var(--badge-color, #64748b) 30%, white);
+  white-space: nowrap;
+}
+
+/* ── Empty state ── */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 1.25rem 0.5rem;
+  color: #94a3b8;
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.emptyIcon {
+  font-size: 1.75rem;
+}
+
+/* ── Total count ── */
+.totalCount {
+  margin: 0.5rem 0 0;
+  font-size: 0.7rem;
+  color: #94a3b8;
+  text-align: right;
+}
+
+/* ── Skeleton ── */
+.skeletonContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+}
+
+.skeletonRow {
+  display: grid;
+  grid-template-columns: 1fr 60px 70px 60px;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.skeletonTitle {
+  height: 0.8rem;
+  border-radius: 4px;
+}
+
+.skeletonVote {
+  height: 0.8rem;
+  border-radius: 4px;
+}
+
+.skeletonWeight {
+  height: 0.75rem;
+  border-radius: 4px;
+}
+
+.skeletonBadge {
+  height: 1.1rem;
+  border-radius: 999px;
+}
+
+/* ── Mobile ── */
+@media (max-width: 540px) {
+  .row {
+    grid-template-columns: 1fr auto auto;
+  }
+
+  /* Hide weight on small screens to save space */
+  .weightCell {
+    display: none;
+  }
+
+  .skeletonRow {
+    grid-template-columns: 1fr 60px 60px;
+  }
+
+  .skeletonWeight {
+    display: none;
+  }
+
+  .filterRow {
+    justify-content: flex-start;
+  }
+}
