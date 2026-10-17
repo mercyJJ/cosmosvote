@@ -12,7 +12,7 @@
  *   - Focus is returned to the triggering element on unmount.
  */
 import type { Proposal } from '../types';
-import { fetchHasVoted, fetchVoteRecord } from '../api';
+import { fetchHasVoted, fetchVoteRecord, fetchTokenBalance, fetchDelegatedWeight } from '../api';
 import { useEffect, useRef, useState } from 'react';
 import { formatTokenAmount, maskAddress } from '../utils';
 import { explorerAccountUrl } from '../config';
@@ -53,6 +53,11 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
   const [voteError, setVoteError] = useState<string | null>(null);
   const [showFullProposer, setShowFullProposer] = useState(false);
 
+  // Voting power state (issue #20)
+  const [ownBalance, setOwnBalance] = useState<bigint | null>(null);
+  const [delegatedWeight, setDelegatedWeight] = useState<bigint | null>(null);
+  const [votingPowerLoading, setVotingPowerLoading] = useState(false);
+
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   // Ref to the confirmation message — focus moves here after a successful vote
@@ -77,6 +82,25 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
       setVoteRecord(null);
     });
   }, [p.id, walletAddress]);
+
+  // Fetch voting power (own balance + delegated weight) — issue #20
+  useEffect(() => {
+    if (!walletAddress) return;
+    setVotingPowerLoading(true);
+    Promise.all([
+      fetchTokenBalance(walletAddress),
+      fetchDelegatedWeight(walletAddress, []),
+    ])
+      .then(([balance, delegated]) => {
+        setOwnBalance(balance);
+        setDelegatedWeight(delegated);
+      })
+      .catch(() => {
+        setOwnBalance(BigInt(0));
+        setDelegatedWeight(BigInt(0));
+      })
+      .finally(() => setVotingPowerLoading(false));
+  }, [walletAddress]);
 
   // Focus the close button when the dialog opens
   useEffect(() => {
@@ -187,6 +211,8 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
         style={{ background: '#fff', borderRadius: 12, padding: '2rem', maxWidth: 600, width: '90%', maxHeight: '80vh', overflowY: 'auto' }}
         onClick={e => e.stopPropagation()}
       >
+        {/* Skeleton pulse animation */}
+        <style>{`@keyframes pulse{0%,100%{background-position:100% 50%}50%{background-position:0% 50%}}`}</style>
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
           <h2 id="proposal-dialog-title" style={{ margin: 0 }}>Proposal #{String(p.id)}</h2>
@@ -274,6 +300,79 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
         {/* ── Vote section ── */}
         {walletAddress && (
           <div style={{ padding: '0.75rem', background: '#f0f9ff', borderRadius: 8, fontSize: '0.875rem', marginBottom: '1rem' }}>
+            {/* Voting power panel — issue #20 */}
+            {hasVoted === false && isProposalActive && (
+              <div
+                style={{
+                  background: '#fff',
+                  border: '1px solid #bfdbfe',
+                  borderRadius: 6,
+                  padding: '0.6rem 0.85rem',
+                  marginBottom: '0.75rem',
+                  fontSize: '0.8rem',
+                }}
+              >
+                <div style={{ fontWeight: 600, color: '#1e40af', marginBottom: '0.35rem' }}>
+                  🗳️ Your Voting Power
+                </div>
+                {votingPowerLoading ? (
+                  <div
+                    aria-busy="true"
+                    aria-label="Loading voting power"
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.3rem',
+                    }}
+                  >
+                    {/* Skeleton lines */}
+                    {[100, 80].map(w => (
+                      <div
+                        key={w}
+                        style={{
+                          height: 12,
+                          width: `${w}%`,
+                          background: 'linear-gradient(90deg,#e0e7ff 25%,#c7d2fe 50%,#e0e7ff 75%)',
+                          backgroundSize: '200% 100%',
+                          borderRadius: 4,
+                          animation: 'pulse 1.4s ease-in-out infinite',
+                        }}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
+                      <span>
+                        <span style={{ color: '#64748b' }}>Own balance: </span>
+                        <strong>{ownBalance !== null ? formatTokenAmount(ownBalance, decimals) : '—'}</strong>
+                      </span>
+                      <span>
+                        <span style={{ color: '#64748b' }}>Delegated: </span>
+                        <strong>{delegatedWeight !== null ? formatTokenAmount(delegatedWeight, decimals) : '—'}</strong>
+                      </span>
+                    </div>
+                    {ownBalance !== null && delegatedWeight !== null && ownBalance + delegatedWeight === BigInt(0) && (
+                      <div
+                        role="alert"
+                        style={{
+                          marginTop: '0.5rem',
+                          padding: '0.4rem 0.6rem',
+                          background: '#fef9c3',
+                          border: '1px solid #fde047',
+                          borderRadius: 5,
+                          color: '#78350f',
+                          fontWeight: 500,
+                        }}
+                      >
+                        ⚠️ You have 0 voting power. Acquire CVT tokens or receive a delegation to vote.
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
             {hasVoted === null && <span>Checking vote status…</span>}
 
             {hasVoted && voteRecord && !voteConfirmation && (
