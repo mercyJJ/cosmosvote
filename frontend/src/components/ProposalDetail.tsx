@@ -12,10 +12,11 @@
  *   - Focus is returned to the triggering element on unmount.
  */
 import type { Proposal } from '../types';
-import { fetchHasVoted, fetchVoteRecord } from '../api';
+import { castVote, fetchHasVoted, fetchVoteRecord } from '../api';
 import { useEffect, useRef, useState } from 'react';
 import { formatTokenAmount, maskAddress } from '../utils';
 import { explorerAccountUrl } from '../config';
+import { useWallet } from '../WalletContext';
 
 interface Props {
   proposal: Proposal;
@@ -46,6 +47,9 @@ const VOTE_CONFIG: Array<{
 ];
 
 export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddress, onClose, triggerRef }: Props) {
+  // Get signTransaction from the wallet store so votes can be signed by the real wallet.
+  const { signTransaction } = useWallet();
+
   const [hasVoted, setHasVoted] = useState<boolean | null>(null);
   const [voteRecord, setVoteRecord] = useState<{ vote: string; weight: bigint } | null>(null);
   const [isVoting, setIsVoting] = useState(false);
@@ -151,15 +155,14 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
   const total = p.votes_yes + p.votes_no + p.votes_abstain;
   const shortAddress = maskAddress(p.proposer);
 
-  // Simulated vote submission — real implementation would call castVote via SDK
+  // Submit a vote via the connected wallet. Signs and broadcasts a real Soroban transaction.
   async function handleVote(voteType: VoteChoice) {
-    if (!canVote) return;
+    if (!canVote || !walletAddress) return;
     setIsVoting(true);
     setVoteError(null);
     setVoteConfirmation(null);
     try {
-      // Placeholder: actual SDK castVote call would go here
-      await new Promise<void>(res => setTimeout(res, 800));
+      await castVote(walletAddress, Number(p.id), voteType, signTransaction);
       setHasVoted(true);
       setVoteRecord({ vote: voteType, weight: BigInt(0) });
       setVoteConfirmation(`Your vote "${voteType}" on proposal #${String(p.id)} has been submitted.`);

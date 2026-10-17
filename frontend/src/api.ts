@@ -194,19 +194,36 @@ export async function fetchDelegatedWeight(voter: string, delegators: string[]):
   return BigInt(String(result));
 }
 
+/**
+ * Cast a vote on an active proposal by signing and submitting a real Soroban
+ * transaction via the user's connected wallet (Freighter or xBull).
+ *
+ * The `signTx` callback is provided by callers (typically the walletStore's
+ * `signTransaction` action) so that this module stays decoupled from the
+ * wallet store and remains easily testable.
+ *
+ * @param walletAddress - The voter's public key.
+ * @param proposalId    - Numeric proposal ID.
+ * @param vote          - 'Yes', 'No', or 'Abstain'.
+ * @param signTx        - Async function that signs a raw XDR and returns the signed XDR.
+ * @returns The submitted transaction hash.
+ */
 export async function castVote(
   walletAddress: string,
   proposalId: number,
-  vote: 'Yes' | 'No' | 'Abstain'
+  vote: 'Yes' | 'No' | 'Abstain',
+  signTx: (xdr: string, networkPassphrase: string) => Promise<string>,
 ): Promise<string> {
-  // Create a dummy account for signing (in a real app, this would use the user's actual wallet)
-  const dummyAccount = new Account(walletAddress, '0');
+  // Fetch the current sequence number for the sender's account so the
+  // transaction is valid on-chain.
+  const accountData = await server.getAccount(walletAddress);
+  const account = new Account(walletAddress, accountData.sequenceNumber());
 
-  // Convert vote string to enum value
+  // Convert vote string to the contract enum index.
   const voteEnum = { Yes: 0, No: 1, Abstain: 2 }[vote];
 
-  // Build the transaction
-  const tx = new TransactionBuilder(dummyAccount, {
+  // Build the unsigned transaction.
+  const tx = new TransactionBuilder(account, {
     fee: '100',
     networkPassphrase: config.networkPassphrase,
   })
@@ -224,14 +241,24 @@ export async function castVote(
     .setTimeout(30)
     .build();
 
-  // Simulate the transaction to verify it works
-  const result = (await server.simulateTransaction(
-    tx
-  )) as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+  // Simulate to get the resource fee and footprint, then assemble.
+  const simResponse = await server.simulateTransaction(tx);
+  if (SorobanRpc.Api.isSimulationError(simResponse)) {
+    throw new SimulationError(`Simulation failed: ${simResponse.error}`, simResponse);
+  }
+  const assembledTx = SorobanRpc.assembleTransaction(tx, simResponse).build();
 
-  if (!result.result) throw new Error('Transaction simulation failed');
+  // Sign with the user's real wallet (no dummy key).
+  const signedXdr = await signTx(assembledTx.toXDR(), config.networkPassphrase);
 
-  // In a real app, we would sign and submit the transaction here using the actual wallet
-  // For now, we return a simulated transaction hash
-  return `${result.result.retval}`;
+  // Submit the signed transaction.
+  const submitResponse = await server.sendTransaction(
+    TransactionBuilder.fromXDR(signedXdr, config.networkPassphrase)
+  );
+
+  if (submitResponse.status === 'ERROR') {
+    throw new Error(`Transaction submission failed: ${submitResponse.errorResult}`);
+  }
+
+  return submitResponse.hash;
 }
