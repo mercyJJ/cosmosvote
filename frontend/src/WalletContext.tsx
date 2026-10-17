@@ -6,31 +6,21 @@
  * to work without modification.
  *
  * Issue #379: centralized state management migration with Zustand.
+ * Issue #13: Removed duplicate / stale context declarations left over from
+ *            the pre-Zustand implementation that caused TypeScript errors.
  */
 import React from 'react';
 import { useWalletStore } from './store/walletStore';
 
-// Re-export the hook under the original name for component compatibility
+// Re-export the hook under the original name for component compatibility.
+// All wallet state (walletAddress, tokenBalance, showModal, connect,
+// disconnect, …) is sourced exclusively from the Zustand walletStore.
 export function useWallet() {
   return useWalletStore();
 }
 
-const WalletContext = createContext<WalletContextType | undefined>(undefined);
-
-function detectFreighterError(err: unknown): string {
-  const msg = err instanceof Error ? err.message : String(err);
-  if (typeof window !== 'undefined' && !('freighter' in window)) {
-    return 'Freighter wallet extension not found. Please install it and refresh.';
-  }
-  if (msg.toLowerCase().includes('user rejected') || msg.toLowerCase().includes('denied')) {
-    return 'Connection rejected. Click "Retry" to try again.';
-  }
-  if (msg.toLowerCase().includes('network') || msg.toLowerCase().includes('timeout')) {
-    return 'Network error connecting to wallet. Check your connection and retry.';
-  }
-  return `Wallet connection failed: ${msg}`;
-}
-
+// No-op provider kept for backward compatibility with components that wrap
+// their subtree in <WalletProvider>.
 export function WalletProvider({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
