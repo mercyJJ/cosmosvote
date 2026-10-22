@@ -13,6 +13,8 @@
  * only). Warn loudly at startup when no keys are set.
  */
 
+import { resolveRoleFromStore } from './keyStore';
+
 export type Role = 'admin' | 'viewer' | 'none';
 
 const ADMIN_KEY  = process.env.ADMIN_API_KEY  ?? '';
@@ -25,10 +27,23 @@ if (!ADMIN_KEY) {
   );
 }
 
-/** Resolve the role for a raw Authorization header value. */
+/**
+ * Resolve the role for a raw Authorization header value.
+ *
+ * Issue #119 — key rotation: keys issued via the key-store (see
+ * `keyStore.ts` / `scripts/rotate-notification-key.ts`) are checked first
+ * so that a revoked key is rejected (401) immediately, even if it still
+ * happens to match a legacy env-var key. The static ADMIN_API_KEY /
+ * VIEWER_API_KEY env vars remain supported for backward compatibility with
+ * deployments that have not migrated to the rotating key store yet.
+ */
 export function resolveRole(authHeader: string | undefined): Role {
   if (!authHeader) return 'none';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
+
+  const storeRole = resolveRoleFromStore(token);
+  if (storeRole !== 'none') return storeRole;
+
   if (ADMIN_KEY  && token === ADMIN_KEY)  return 'admin';
   if (VIEWER_KEY && token === VIEWER_KEY) return 'viewer';
   return 'none';

@@ -17,6 +17,7 @@ frontend/.env.local
 backend/node_modules/
 backend/dist/
 backend/data/
+notification-service/data/
 backend/*.sqlite*
 
 # Terraform

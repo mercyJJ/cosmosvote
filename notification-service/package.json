@@ -9,7 +9,11 @@
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "test": "ts-node __tests__/emailTemplates.test.ts",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "keys:rotate": "ts-node src/rotateKeyCli.ts rotate",
+    "keys:revoke": "ts-node src/rotateKeyCli.ts revoke",
+    "keys:list": "ts-node src/rotateKeyCli.ts list",
+    "keys:check-stale": "ts-node src/rotateKeyCli.ts check-stale"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "12.3.0",
