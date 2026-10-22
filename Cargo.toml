@@ -19,5 +19,5 @@ lto = true
 [profile.release-with-logs]
 inherits = "release"
 
-[dev-dependencies]
-serde_json = "1.0"
+# Note: serde_json dev-dependency for perf tests is declared in the
+# individual crate Cargo.toml files that need it.

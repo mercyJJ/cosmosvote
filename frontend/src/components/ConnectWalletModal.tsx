@@ -1,6 +1,24 @@
 import { useState } from 'react';
 import { useWallet } from '../WalletContext';
 
+const WALLET_INFO: Record<'Freighter' | 'xBull', { icon: string; installUrl: string }> = {
+  Freighter: {
+    icon: '🚀',
+    installUrl: 'https://freighter.app',
+  },
+  xBull: {
+    icon: '🐂',
+    installUrl: 'https://xbull.app',
+  },
+};
+
+function isFreighterInstallError(message: string): boolean {
+  return (
+    message.toLowerCase().includes('freighter wallet extension not found') ||
+    message.toLowerCase().includes('freighter') && message.toLowerCase().includes('not found')
+  );
+}
+
 export function ConnectWalletModal() {
   const { connect, closeModal } = useWallet();
   const [error, setError] = useState<string | null>(null);
@@ -12,11 +30,14 @@ export function ConnectWalletModal() {
     try {
       await connect(wallet);
     } catch (e) {
-      setError(String(e instanceof Error ? e.message : e));
+      const message = e instanceof Error ? e.message : String(e);
+      setError(message);
     } finally {
       setLoading(null);
     }
   };
+
+  const isInstallError = !!error && isFreighterInstallError(error);
 
   return (
     <div
@@ -46,12 +67,26 @@ export function ConnectWalletModal() {
                 cursor: loading ? 'not-allowed' : 'pointer', fontSize: '1rem', fontWeight: 500,
               }}
             >
-              {loading === wallet ? '⏳' : '🔗'} {wallet}
+              {loading === wallet ? '⏳' : WALLET_INFO[wallet].icon} {wallet}
             </button>
           ))}
         </div>
 
-        {error && <p role="alert" style={{ color: '#dc2626', marginTop: '1rem', fontSize: '0.875rem' }}>{error}</p>}
+        {error && (
+          <div role="alert" style={{ marginTop: '1rem' }}>
+            <p style={{ color: '#dc2626', fontSize: '0.875rem', margin: 0 }}>{error}</p>
+            {isInstallError && (
+              <a
+                href={WALLET_INFO['Freighter'].installUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ display: 'inline-block', marginTop: '0.5rem', color: '#2563eb', fontSize: '0.875rem' }}
+              >
+                Install Freighter →
+              </a>
+            )}
+          </div>
+        )}
 
         <button
           onClick={closeModal}

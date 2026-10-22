@@ -194,19 +194,47 @@ export async function fetchDelegatedWeight(voter: string, delegators: string[]):
   return BigInt(String(result));
 }
 
+/**
+ * Encodes a vote into the Soroban contract's Vote enum ScVal.
+ *
+ * The contract's Vote enum variants:
+ *   0 = Yes, 1 = No, 2 = Abstain, 3 = Choice(u32 index)
+ *
+ * For standard votes pass a VoteType string ('Yes' | 'No' | 'Abstain').
+ * For named-choice proposals pass { choice: number } with the 0-based index.
+ *
+ * Issue #14: Add support for Vote::Choice(u32) multi-choice proposals.
+ */
+export type VoteInput = 'Yes' | 'No' | 'Abstain' | { choice: number };
+
+function encodeVoteArg(vote: VoteInput): xdr.ScVal {
+  if (typeof vote === 'object' && 'choice' in vote) {
+    // Vote::Choice(u32) — encode as a map/struct ScVal matching the Rust enum
+    return xdr.ScVal.scvMap([
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol('Choice'),
+        val: nativeToScVal(BigInt(vote.choice), { type: 'u32' }),
+      }),
+    ]);
+  }
+  // Standard Yes / No / Abstain — encoded as simple u32 enum indices
+  const idx = { Yes: 0, No: 1, Abstain: 2 }[vote];
+  return nativeToScVal(idx, { type: 'u32' });
+}
+
 export async function castVote(
   walletAddress: string,
   proposalId: number,
-  vote: 'Yes' | 'No' | 'Abstain'
+  vote: VoteInput,
+  signTx: (xdr: string, networkPassphrase: string) => Promise<string>,
 ): Promise<string> {
-  // Create a dummy account for signing (in a real app, this would use the user's actual wallet)
-  const dummyAccount = new Account(walletAddress, '0');
+  // Fetch the current sequence number for the sender's account so the
+  // transaction is valid on-chain.
+  const accountData = await server.getAccount(walletAddress);
+  const account = new Account(walletAddress, accountData.sequenceNumber());
 
-  // Convert vote string to enum value
-  const voteEnum = { Yes: 0, No: 1, Abstain: 2 }[vote];
-
-  // Build the transaction
-  const tx = new TransactionBuilder(dummyAccount, {
+  // Build the unsigned transaction.
+  const tx = new TransactionBuilder(account, {
     fee: '100',
     networkPassphrase: config.networkPassphrase,
   })
@@ -217,21 +245,31 @@ export async function castVote(
         args: [
           nativeToScVal(walletAddress, { type: 'address' }),
           nativeToScVal(BigInt(proposalId), { type: 'u64' }),
-          nativeToScVal(voteEnum, { type: 'u32' }),
+          encodeVoteArg(vote),
         ],
       })
     )
     .setTimeout(30)
     .build();
 
-  // Simulate the transaction to verify it works
-  const result = (await server.simulateTransaction(
-    tx
-  )) as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+  // Simulate to get the resource fee and footprint, then assemble.
+  const simResponse = await server.simulateTransaction(tx);
+  if (SorobanRpc.Api.isSimulationError(simResponse)) {
+    throw new SimulationError(`Simulation failed: ${simResponse.error}`, simResponse);
+  }
+  const assembledTx = SorobanRpc.assembleTransaction(tx, simResponse).build();
 
-  if (!result.result) throw new Error('Transaction simulation failed');
+  // Sign with the user's real wallet (no dummy key).
+  const signedXdr = await signTx(assembledTx.toXDR(), config.networkPassphrase);
 
-  // In a real app, we would sign and submit the transaction here using the actual wallet
-  // For now, we return a simulated transaction hash
-  return `${result.result.retval}`;
+  // Submit the signed transaction.
+  const submitResponse = await server.sendTransaction(
+    TransactionBuilder.fromXDR(signedXdr, config.networkPassphrase)
+  );
+
+  if (submitResponse.status === 'ERROR') {
+    throw new Error(`Transaction submission failed: ${submitResponse.errorResult}`);
+  }
+
+  return submitResponse.hash;
 }

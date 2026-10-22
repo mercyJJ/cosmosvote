@@ -9,12 +9,70 @@ This directory contains observability templates for CosmosVote deployments.
 
 ---
 
-## Metrics Reference
+## Backend `/metrics` endpoint
 
-The following metrics are expected to be exposed by the CosmosVote indexer/relayer service. Instrument your service using a Prometheus client library (e.g. [`prometheus`](https://crates.io/crates/prometheus) for Rust, [`prom-client`](https://github.com/siimon/prom-client) for Node.js).
+The CosmosVote notification service exposes a Prometheus-compatible `/metrics` endpoint
+on the same port as the health checks (default **8080**).
+
+### Exposed metrics
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
+| `notification_sent_total` | Counter | `service`, `contract_id` | Webhook notifications successfully delivered |
+| `notification_failed_total` | Counter | `service`, `contract_id` | Notifications that failed after all retries |
+| `webhook_latency_seconds` | Histogram | `service`, `contract_id`, `status_code` | Per-attempt webhook delivery latency |
+| `active_subscriptions` | Gauge | `service` | Contract subscriptions currently being polled |
+
+Default Node.js / process metrics (heap, GC, event-loop lag, …) are also collected
+automatically via `prom-client`'s `collectDefaultMetrics`.
+
+### Prometheus scrape configuration
+
+Add the following job to your `prometheus.yml`:
+
+```yaml
+scrape_configs:
+  - job_name: cosmosvote-notification
+    static_configs:
+      - targets:
+          - <backend-host>:8080   # replace with the actual host / service name
+    metrics_path: /metrics
+    scrape_interval: 15s
+```
+
+If you are running with Docker Compose, use the service name as the target:
+
+```yaml
+scrape_configs:
+  - job_name: cosmosvote-notification
+    static_configs:
+      - targets:
+          - cosmosvote-backend:8080
+    metrics_path: /metrics
+    scrape_interval: 15s
+```
+
+For Kubernetes / Prometheus Operator, annotate the Pod:
+
+```yaml
+annotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/metrics"
+```
+
+---
+
+## Metrics Reference (full set)
+
+The following metrics are expected from the CosmosVote indexer/relayer service.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `notification_sent_total` | Counter | `service`, `contract_id` | Webhook notifications delivered |
+| `notification_failed_total` | Counter | `service`, `contract_id` | Notifications that failed (all retries exhausted) |
+| `webhook_latency_seconds` | Histogram | `service`, `contract_id`, `status_code` | Delivery latency per attempt |
+| `active_subscriptions` | Gauge | `service` | Contracts currently being polled |
 | `cosmosvote_rpc_requests_total` | Counter | `network`, `method` | Total RPC calls made |
 | `cosmosvote_rpc_errors_total` | Counter | `network`, `method`, `code` | Failed RPC calls |
 | `cosmosvote_rpc_request_duration_ms` | Histogram | `network`, `method` | RPC call latency in milliseconds |

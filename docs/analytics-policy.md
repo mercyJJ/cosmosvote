@@ -40,7 +40,14 @@ Events are batched in memory and `localStorage` (as a write-ahead buffer) and fl
 
 ## How to Opt Out
 
-Analytics are **disabled by default**. To confirm they remain off, ensure your `.env` file does not set `VITE_ANALYTICS_ENABLED=true`:
+A **cookie consent banner** appears on first visit. You can:
+
+- Click **Reject** to disable all analytics — no events will be sent.
+- Click **Accept** to allow anonymous analytics collection.
+
+Your choice is saved in `localStorage` under the key `analytics_consent` and persists across sessions. You can change your preference at any time by clearing site data or using the banner if it reappears.
+
+Analytics are also **disabled by default** at the operator level. To confirm they remain off, ensure your `.env` file does not set `VITE_ANALYTICS_ENABLED=true`:
 
 ```env
 # analytics disabled (default)

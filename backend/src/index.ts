@@ -1,20 +1,40 @@
+import { loadEnv } from './env';
 import { initErrorTracking, flushErrorTracking } from './errorTracking';
 import { createHealthServer } from './health';
 import { NotificationService } from './notificationService';
 import { logger } from './logger';
+import helmet from 'helmet';
+
+// Validate env vars before anything else — fails fast with a clear message.
+const env = loadEnv();
 
 // Must be called before any async work so unhandled rejections are captured.
 initErrorTracking();
 
+// Initialize the append-only audit log for admin operations.
+auditLogger.init({ logPath: env.AUDIT_LOG_PATH });
+
 const service = new NotificationService({
-  rpcUrl: process.env.STELLAR_RPC_URL ?? 'http://localhost:8000',
-  contractId: process.env.GOVERNANCE_CONTRACT_ID ?? '',
-  webhookUrl: process.env.WEBHOOK_URL ?? '',
-  pollIntervalMs: Number(process.env.POLL_INTERVAL_MS ?? 6_000),
+  rpcUrl: env.STELLAR_RPC_URL,
+  contractId: env.GOVERNANCE_CONTRACT_ID,
+  webhookUrl: env.WEBHOOK_URL,
+  pollIntervalMs: env.POLL_INTERVAL_MS,
 });
 
-const healthServer = createHealthServer(() => service.checkReadiness());
-const healthPort = Number(process.env.HEALTH_PORT ?? 8080);
+// Security headers middleware. Applied to every HTTP response.
+// HTTPS-only enforcement: HSTS (max-age=31536000) instructs browsers to
+// only use HTTPS for this host for one year. The API must be served over
+// TLS (terminated at the load balancer / reverse proxy) for HSTS to take
+// effect; plain-HTTP deployments should redirect to HTTPS upstream.
+const securityHeaders = helmet({
+  hsts: { maxAge: 31536000, includeSubDomains: true },
+  frameguard: { action: 'deny' },
+  noSniff: true,
+  referrerPolicy: { policy: 'strict-origin' },
+});
+
+const healthServer = createHealthServer(() => service.checkReadiness(), securityHeaders);
+const healthPort = env.HEALTH_PORT;
 healthServer.listen(healthPort, '0.0.0.0', () => {
   console.info(`[cosmosvote-backend] health endpoints listening on port ${healthPort}`);
 });
@@ -26,6 +46,7 @@ async function shutdown() {
   logger.info({ event: 'shutdown' }, 'notification service stopping');
   service.stop();
   healthServer.close();
+  await auditLogger.flush();
   await flushErrorTracking();
   process.exit(0);
 }

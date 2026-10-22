@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   SorobanRpc,
   TransactionBuilder,
@@ -9,6 +9,7 @@ import {
   Keypair,
 } from '@stellar/stellar-sdk';
 import { config, ACTIVE_NETWORK } from '../config';
+import { sanitizeWalletMessage } from '../utils/sanitizeWalletMessage';
 
 interface Props {
   walletAddress: string;
@@ -29,6 +30,47 @@ const INITIAL_FORM: FormState = {
   quorum: '1000',
   duration: '86400', // 1 day in seconds
 };
+
+/** Returns the localStorage key scoped to the wallet address to prevent cross-user leakage. */
+function draftKey(walletAddress: string): string {
+  return `cosmosvote:proposal_draft:${walletAddress}`;
+}
+
+function saveDraft(walletAddress: string, form: FormState): void {
+  try {
+    localStorage.setItem(draftKey(walletAddress), JSON.stringify(form));
+  } catch {
+    // Storage may be full or unavailable — silently ignore
+  }
+}
+
+function loadDraft(walletAddress: string): FormState | null {
+  try {
+    const raw = localStorage.getItem(draftKey(walletAddress));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<FormState>;
+    // Validate shape before returning
+    if (
+      typeof parsed.title === 'string' &&
+      typeof parsed.description === 'string' &&
+      typeof parsed.quorum === 'string' &&
+      typeof parsed.duration === 'string'
+    ) {
+      return parsed as FormState;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function clearDraft(walletAddress: string): void {
+  try {
+    localStorage.removeItem(draftKey(walletAddress));
+  } catch {
+    // ignore
+  }
+}
 
 const DURATION_PRESETS = [
   { label: '1 day', value: '86400' },
@@ -57,16 +99,56 @@ export function CreateProposalForm({ walletAddress, onSuccess, onCancel }: Props
   const [touched, setTouched] = useState<Partial<Record<keyof FormState, boolean>>>({});
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [showRestorePrompt, setShowRestorePrompt] = useState(false);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // On mount: check for a saved draft and prompt the user to restore it
+  useEffect(() => {
+    const draft = loadDraft(walletAddress);
+    if (draft && (draft.title || draft.description)) {
+      setShowRestorePrompt(true);
+    }
+  }, [walletAddress]);
+
+  // Auto-save after 1 second of inactivity whenever form changes
+  const scheduleAutosave = useCallback(
+    (nextForm: FormState) => {
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = setTimeout(() => saveDraft(walletAddress, nextForm), 1000);
+    },
+    [walletAddress],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    };
+  }, []);
 
   const errors = fieldError(form);
   const hasErrors = Object.keys(errors).length > 0;
 
   function handleChange(field: keyof FormState, value: string) {
-    setForm(prev => ({ ...prev, [field]: value }));
+    setForm(prev => {
+      const next = { ...prev, [field]: value };
+      scheduleAutosave(next);
+      return next;
+    });
   }
 
   function handleBlur(field: keyof FormState) {
     setTouched(prev => ({ ...prev, [field]: true }));
+  }
+
+  function handleRestoreDraft() {
+    const draft = loadDraft(walletAddress);
+    if (draft) setForm(draft);
+    setShowRestorePrompt(false);
+  }
+
+  function handleDiscardDraft() {
+    clearDraft(walletAddress);
+    setShowRestorePrompt(false);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -90,6 +172,11 @@ export function CreateProposalForm({ walletAddress, onSuccess, onCancel }: Props
           ? Networks.PUBLIC
           : Networks.TESTNET;
 
+      // Sanitize all wallet-facing message fields to ASCII-safe characters only
+      // before they are embedded in the transaction (and shown by the wallet).
+      const safeTitle = sanitizeWalletMessage(form.title.trim(), 128);
+      const safeDescription = sanitizeWalletMessage(form.description.trim(), 1024);
+
       const tx = new TransactionBuilder(account, {
         fee: '1000000', // 0.1 XLM max fee — governance calls are compute-heavy
         networkPassphrase,
@@ -100,8 +187,8 @@ export function CreateProposalForm({ walletAddress, onSuccess, onCancel }: Props
             function: 'create_proposal',
             args: [
               nativeToScVal(walletAddress, { type: 'address' }),
-              nativeToScVal(form.title.trim(), { type: 'string' }),
-              nativeToScVal(form.description.trim(), { type: 'string' }),
+              nativeToScVal(safeTitle, { type: 'string' }),
+              nativeToScVal(safeDescription, { type: 'string' }),
               nativeToScVal(BigInt(Math.round(Number(form.quorum))), { type: 'i128' }),
               nativeToScVal(BigInt(Math.round(Number(form.duration))), { type: 'u64' }),
             ],
@@ -127,8 +214,11 @@ export function CreateProposalForm({ walletAddress, onSuccess, onCancel }: Props
       // Development / testnet path: ask for secret key via prompt.
       // Production path: integrate wallet extension SDK and replace this block.
       const secretKey = window.prompt(
-        '⚠️ Development mode: enter your Stellar secret key (S...) to sign this transaction.\n\n' +
-        'In production, connect a wallet extension (Freighter) instead.'
+        sanitizeWalletMessage(
+          'Development mode: enter your Stellar secret key (S...) to sign this transaction. ' +
+          'In production, connect a wallet extension (Freighter) instead.',
+          512,
+        )
       );
 
       if (!secretKey) {
@@ -162,6 +252,8 @@ export function CreateProposalForm({ walletAddress, onSuccess, onCancel }: Props
           const returnedId = status.returnValue
             ? Number(status.returnValue.u64().toString())
             : 0;
+          // Clear the draft on successful submission
+          clearDraft(walletAddress);
           onSuccess(returnedId);
           return;
         }
@@ -241,6 +333,60 @@ export function CreateProposalForm({ walletAddress, onSuccess, onCancel }: Props
             ×
           </button>
         </div>
+
+        {/* Restore draft banner */}
+        {showRestorePrompt && (
+          <div
+            role="alert"
+            style={{
+              marginBottom: '1rem',
+              padding: '0.75rem',
+              background: '#eff6ff',
+              border: '1px solid #93c5fd',
+              borderRadius: 6,
+              fontSize: '0.875rem',
+              color: '#1d4ed8',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: '0.5rem',
+            }}
+          >
+            <span>📝 You have a saved draft. Restore it?</span>
+            <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={handleRestoreDraft}
+                style={{
+                  background: '#2563eb',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 4,
+                  padding: '0.25rem 0.75rem',
+                  fontSize: '0.8rem',
+                  cursor: 'pointer',
+                }}
+              >
+                Restore
+              </button>
+              <button
+                type="button"
+                onClick={handleDiscardDraft}
+                style={{
+                  background: 'none',
+                  color: '#64748b',
+                  border: '1px solid #d1d5db',
+                  borderRadius: 4,
+                  padding: '0.25rem 0.75rem',
+                  fontSize: '0.8rem',
+                  cursor: 'pointer',
+                }}
+              >
+                Discard
+              </button>
+            </div>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} noValidate>
           <div style={{ display: 'grid', gap: '1rem' }}>

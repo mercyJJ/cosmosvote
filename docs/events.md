@@ -152,11 +152,13 @@ Emitted when the admin cancels an active proposal.
 |-------|------------|------|-------------|
 | proposal_id | 0 | u64 | Cancelled proposal ID |
 | admin | 1 | Address | Admin that cancelled |
+| voter_count | 2 | u32 | Number of votes cast at time of cancellation |
+| reason | 3 | String | Cancellation reason (empty string if none provided) |
 
 ```json
 {
   "topics": ["gov", "cancel"],
-  "data": [1, "GABC...ADMIN"]
+  "data": [1, "GABC...ADMIN", 42, "Duplicate proposal"]
 }
 ```
 
@@ -186,47 +188,53 @@ Emitted when the quorum threshold for a proposal is changed.
 
 ---
 
-### `admin_transfer_initiated`
+### `admin_transfer_proposed`
 
-Emitted when the current admin nominates a pending admin (two-step transfer).
+Emitted when the current admin nominates a pending admin via `propose_admin`
+(the first step of the two-step admin transfer). The payload includes the
+ledger timestamp so off-chain monitors can order transfers without relying on
+ledger sequence alone.
 
 | Field | Topic index | Type | Description |
 |-------|-------------|------|-------------|
 | contract_tag | 0 | Symbol | `"gov"` |
-| event_tag | 1 | Symbol | `"admint"` |
+| event_tag | 1 | Symbol | `"propose"` |
 
 | Field | Data index | Type | Description |
 |-------|------------|------|-------------|
-| current_admin | 0 | Address | Existing admin |
+| current_admin | 0 | Address | Existing admin initiating the transfer |
 | pending_admin | 1 | Address | Nominated successor |
+| timestamp | 2 | u64 | Ledger timestamp when the transfer was initiated |
 
 ```json
 {
-  "topics": ["gov", "admint"],
-  "data": ["GABC...OLD", "GABC...NEW"]
+  "topics": ["gov", "propose"],
+  "data": ["GABC...OLD", "GABC...NEW", 1700000000]
 }
 ```
 
 ---
 
-### `admin_transfer_completed`
+### `admin_transfer_accepted`
 
-Emitted when the pending admin accepts and the transfer is finalised.
+Emitted when the pending admin calls `accept_admin` and the transfer completes
+(the second and final step of the two-step admin transfer).
 
 | Field | Topic index | Type | Description |
 |-------|-------------|------|-------------|
 | contract_tag | 0 | Symbol | `"gov"` |
-| event_tag | 1 | Symbol | `"admina"` |
+| event_tag | 1 | Symbol | `"accept"` |
 
 | Field | Data index | Type | Description |
 |-------|------------|------|-------------|
 | previous_admin | 0 | Address | Former admin |
-| new_admin | 1 | Address | New admin |
+| new_admin | 1 | Address | New admin that accepted |
+| timestamp | 2 | u64 | Ledger timestamp when the transfer was accepted |
 
 ```json
 {
-  "topics": ["gov", "admina"],
-  "data": ["GABC...OLD", "GABC...NEW"]
+  "topics": ["gov", "accept"],
+  "data": ["GABC...OLD", "GABC...NEW", 1700003600]
 }
 ```
 
@@ -454,10 +462,10 @@ Emitted when the token admin is changed.
 | gov | vote_cast | `gov`, `voted` | proposal_id, voter, vote, weight |
 | gov | proposal_finalized | `gov`, `final` | proposal_id, state |
 | gov | proposal_executed | `gov`, `exec` | proposal_id, admin |
-| gov | proposal_cancelled | `gov`, `cancel` | proposal_id, admin |
+| gov | proposal_cancelled | `gov`, `cancel` | proposal_id, admin, voter_count, reason |
 | gov | quorum_updated | `gov`, `quorum` | proposal_id, old_quorum, new_quorum |
-| gov | admin_transfer_initiated | `gov`, `admint` | current_admin, pending_admin |
-| gov | admin_transfer_completed | `gov`, `admina` | previous_admin, new_admin |
+| gov | admin_transfer_proposed | `gov`, `propose` | current_admin, pending_admin, timestamp |
+| gov | admin_transfer_accepted | `gov`, `accept` | previous_admin, new_admin, timestamp |
 | gov | admin_transferred | `gov`, `admin` | old_admin, new_admin |
 | gov | paused | `gov`, `paused` | admin |
 | gov | unpaused | `gov`, `unpause` | admin |

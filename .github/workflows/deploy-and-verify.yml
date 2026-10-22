@@ -1,0 +1,253 @@
+name: Deploy and Verify (Mainnet)
+
+# Triggered manually or by a push to main that touches deployment-related files.
+# On health-check failure the rollback script runs automatically and an
+# incident report is posted to Slack.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - "infra/terraform/**"
+      - "scripts/deploy_mainnet.sh"
+      - ".github/workflows/deploy-and-verify.yml"
+  workflow_dispatch:
+    inputs:
+      force_rollback:
+        description: "Force rollback without deploying (for testing the rollback path)"
+        required: false
+        default: "false"
+
+concurrency:
+  group: mainnet-deploy
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Deploy
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Deploy to Mainnet
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      deploy_status: ${{ steps.deploy.outcome }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Build frontend
+        env:
+          VITE_GOVERNANCE_CONTRACT_ID: ${{ vars.GOVERNANCE_CONTRACT_ID }}
+          VITE_TOKEN_CONTRACT_ID: ${{ vars.TOKEN_CONTRACT_ID }}
+          VITE_STELLAR_NETWORK: mainnet
+          VITE_STELLAR_RPC_URL: ${{ vars.STELLAR_RPC_URL }}
+          VITE_FAUCET_API_URL: ${{ vars.FAUCET_API_URL }}
+        run: npm run build
+        working-directory: frontend
+
+      - name: Sync to S3 (static assets — immutable cache)
+        id: deploy
+        run: |
+          aws s3 sync frontend/dist/ s3://${{ secrets.S3_BUCKET }} \
+            --delete \
+            --cache-control "public,max-age=31536000,immutable" \
+            --exclude "index.html"
+          aws s3 cp frontend/dist/index.html s3://${{ secrets.S3_BUCKET }}/index.html \
+            --cache-control "no-cache,no-store,must-revalidate"
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
+
+  # ---------------------------------------------------------------------------
+  # 2. Health check
+  # ---------------------------------------------------------------------------
+  health-check:
+    name: Post-Deploy Health Check
+    needs: deploy
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      health_status: ${{ steps.health.outcome }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Wait for CloudFront propagation
+        run: sleep 30
+
+      - name: Run health checks
+        id: health
+        env:
+          FRONTEND_URL: ${{ vars.FRONTEND_URL }}
+          STELLAR_RPC_URL: ${{ vars.STELLAR_RPC_URL }}
+          STELLAR_HORIZON_URL: ${{ vars.STELLAR_HORIZON_URL }}
+          NOTIFICATION_URL: ${{ vars.NOTIFICATION_HEALTH_URL }}
+        run: bash scripts/health_check.sh
+        continue-on-error: true
+
+      - name: Report health outcome
+        if: steps.health.outcome == 'failure'
+        run: |
+          echo "::error::Health checks failed after deployment. Rollback will be triggered."
+          exit 1
+
+  # ---------------------------------------------------------------------------
+  # 3. Rollback (runs only when health check fails or force_rollback is set)
+  # ---------------------------------------------------------------------------
+  rollback:
+    name: Automatic Rollback
+    needs: [deploy, health-check]
+    if: |
+      failure() ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.force_rollback == 'true')
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      rollback_status: ${{ steps.rollback.outcome }}
+      rollback_log: ${{ steps.rollback.outputs.log_snippet }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Install Stellar CLI
+        run: |
+          curl -sSL https://github.com/stellar/stellar-cli/releases/download/v22.3.2/stellar-cli-v22.3.2-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin
+
+      - name: Run rollback script
+        id: rollback
+        env:
+          NETWORK: mainnet
+          STELLAR_RPC_URL: ${{ vars.STELLAR_RPC_URL }}
+          STELLAR_SECRET_KEY: ${{ secrets.STELLAR_SECRET_KEY }}
+        run: |
+          chmod +x scripts/rollback.sh
+          bash scripts/rollback.sh --latest 2>&1 | tee /tmp/rollback_output.txt
+          echo "log_snippet=$(tail -20 /tmp/rollback_output.txt | tr '\n' '|')" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: Invalidate CloudFront after rollback
+        if: steps.rollback.outcome == 'success'
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
+
+      - name: Upload rollback log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollback-log-${{ github.run_number }}
+          path: /tmp/rollback_output.txt
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # 4. Incident report → Slack
+  # ---------------------------------------------------------------------------
+  incident-report:
+    name: Post Incident Report to Slack
+    needs: [deploy, health-check, rollback]
+    if: always() && needs.health-check.outputs.health_status == 'failure'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Determine overall outcome
+        id: outcome
+        run: |
+          if [[ "${{ needs.rollback.outputs.rollback_status }}" == "success" ]]; then
+            echo "status=✅ Rollback succeeded" >> "$GITHUB_OUTPUT"
+            echo "color=warning" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=❌ Rollback FAILED — manual intervention required" >> "$GITHUB_OUTPUT"
+            echo "color=danger" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post incident report to Slack
+        uses: slackapi/slack-github-action@37ebaef184d7626c5f204ab8d3baff4262dd30f0 # v2
+        with:
+          payload: |
+            {
+              "attachments": [
+                {
+                  "color": "${{ steps.outcome.outputs.color }}",
+                  "blocks": [
+                    {
+                      "type": "header",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "🚨 CosmosVote Mainnet Deployment Incident"
+                      }
+                    },
+                    {
+                      "type": "section",
+                      "fields": [
+                        { "type": "mrkdwn", "text": "*Status:*\n${{ steps.outcome.outputs.status }}" },
+                        { "type": "mrkdwn", "text": "*Run:*\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|#${{ github.run_number }}>" },
+                        { "type": "mrkdwn", "text": "*Commit:*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>" },
+                        { "type": "mrkdwn", "text": "*Actor:*\n${{ github.actor }}" },
+                        { "type": "mrkdwn", "text": "*Branch:*\n${{ github.ref_name }}" },
+                        { "type": "mrkdwn", "text": "*Time (UTC):*\n${{ github.event.head_commit.timestamp }}" }
+                      ]
+                    },
+                    {
+                      "type": "section",
+                      "text": {
+                        "type": "mrkdwn",
+                        "text": "*What happened:*\nPost-deploy health checks failed. The rollback script was triggered automatically to restore the last known-good contract ID references."
+                      }
+                    },
+                    {
+                      "type": "section",
+                      "text": {
+                        "type": "mrkdwn",
+                        "text": "*Next steps:*\n1. Review the <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|workflow run> and the rollback log artifact.\n2. Identify the root cause in the failing commit.\n3. Fix and re-deploy once confident."
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

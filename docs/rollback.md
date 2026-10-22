@@ -1,10 +1,70 @@
 # Rollback Procedure
 
-This document explains how to recover from a failed or bad CosmosVote deployment.
+This document explains how to recover from a failed or bad CosmosVote deployment,
+including the automated rollback triggered by the
+[Deploy and Verify workflow](.github/workflows/deploy-and-verify.yml).
 
 ## Important limitation
 
 Soroban smart contracts are **immutable once deployed**. A rollback does not remove or modify on-chain contracts. It restores the *contract ID references* in your environment (`.env`) so your application points back to the previously known-good contracts.
+
+---
+
+## Automated rollback via GitHub Actions
+
+The `deploy-and-verify.yml` workflow automates the deploy → verify → rollback cycle
+for every push to `main` that touches `frontend/`, `infra/terraform/`, or
+`scripts/deploy_mainnet.sh`.
+
+### Workflow overview
+
+```
+deploy job
+  └── health-check job (waits 30 s for CloudFront propagation, runs scripts/health_check.sh)
+        ├── [PASS] → workflow succeeds, no rollback
+        └── [FAIL] → rollback job triggers automatically
+                        ├── runs scripts/rollback.sh --latest
+                        ├── invalidates CloudFront cache
+                        ├── uploads log artifact (retained 30 days)
+                        └── incident-report job posts Slack summary
+```
+
+### Required GitHub secrets / variables
+
+| Name | Type | Purpose |
+|------|------|---------|
+| `AWS_DEPLOY_ROLE_ARN` | Secret | IAM role with S3 write + CloudFront invalidation |
+| `S3_BUCKET` | Secret | S3 bucket name |
+| `CLOUDFRONT_DISTRIBUTION_ID` | Secret | CloudFront distribution ID |
+| `STELLAR_SECRET_KEY` | Secret | Key used by `rollback.sh` to verify contracts |
+| `SLACK_WEBHOOK_URL` | Secret | Incoming webhook for incident reports |
+| `FRONTEND_URL` | Variable | Public URL of the frontend (for health probe) |
+| `STELLAR_RPC_URL` | Variable | Soroban RPC endpoint |
+| `STELLAR_HORIZON_URL` | Variable | Horizon endpoint |
+| `NOTIFICATION_HEALTH_URL` | Variable | Notification service `/health` endpoint |
+| `GOVERNANCE_CONTRACT_ID` | Variable | Deployed governance contract ID |
+| `TOKEN_CONTRACT_ID` | Variable | Deployed token contract ID |
+
+### Manual trigger with forced rollback
+
+You can force a rollback without a new deploy via the GitHub Actions UI:
+
+1. Go to **Actions → Deploy and Verify (Mainnet)**.
+2. Click **Run workflow**.
+3. Set `force_rollback` to `true`.
+
+This calls `rollback.sh --latest` directly and posts a Slack incident report.
+
+### Idempotency
+
+`rollback.sh` is safe to run multiple times:
+
+- If `.env` already contains the target contract IDs, the `sed -i` substitution
+  is a no-op.
+- On-chain contract verification (`stellar contract invoke … total_supply`) is a
+  read-only call with no side effects.
+- CloudFront invalidation of `/*` is idempotent — a second call simply schedules
+  another invalidation for the same paths.
 
 ---
 

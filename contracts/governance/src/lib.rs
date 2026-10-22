@@ -11,6 +11,14 @@ mod events;
 mod storage;
 mod types;
 
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Minimum seconds remaining in the voting period required to update quorum.
+/// Prevents last-minute quorum manipulation within 1 hour of finalization.
+const QUORUM_TIMELOCK_SECS: u64 = 3_600;
+
 #[cfg(test)]
 mod test;
 #[cfg(test)]
@@ -27,12 +35,16 @@ mod event_tests;
 mod cross_contract_tests;
 #[cfg(test)]
 mod validation_tests;
+#[cfg(test)]
+mod voter_cap_tests;
 
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String, Vec};
 
 use events::GovernanceEvents;
 use storage::GovernanceStorage;
-use types::{ContractError, ContractState, GovernanceConfig, Proposal, ProposalState, TreasuryAction, Vote, VoteRecord};
+use types::{ContractError, ContractState, GovernanceConfig, Proposal, ProposalState, TreasuryAction, VoteRecord};
+
+pub use types::Vote;
 
 // ---------------------------------------------------------------------------
 // Token interface (cross-contract call)
@@ -47,6 +59,7 @@ mod token_interface {
         fn balance_at(env: Env, owner: Address, ledger: u64) -> i128;
         fn total_supply(env: Env) -> i128;
         fn get_delegation(env: Env, owner: Address) -> Option<Address>;
+        fn get_delegators(env: Env, delegate: Address) -> Vec<Address>;
         fn get_delegated_weight(env: Env, voter: Address, delegators: Vec<Address>) -> i128;
     }
 }
@@ -78,6 +91,18 @@ pub struct GovernanceContract;
 
 #[contractimpl]
 impl GovernanceContract {
+    /// Maximum number of unique voters per proposal.
+    ///
+    /// A single `cast_vote` transaction is bounded by Soroban's per-transaction
+    /// resource limits (CPU instructions, ledger reads/writes). The per-vote cost
+    /// is ~5 000 000 instructions and ~4 ledger reads/writes. With a per-tx limit
+    /// of 100 000 000 instructions and 40 reads, a single vote comfortably fits.
+    ///
+    /// However, if `finalise()` or any future extension were to iterate over all
+    /// voters in bulk, the cost would scale linearly. `MAX_VOTER_COUNT` caps the
+    /// voter roll at 10 000 to ensure any such extension stays within a safe
+    /// instruction budget. See `docs/gas-budgeting.md` for measurements.
+    pub const MAX_VOTER_COUNT: u32 = 10_000;
     // -----------------------------------------------------------------------
     // Initialization
     // -----------------------------------------------------------------------
@@ -225,6 +250,13 @@ impl GovernanceContract {
             }
         }
 
+        // Validate treasury action amount is non-zero (issue #68)
+        if let Some(ref action) = treasury_action {
+            if action.amount <= 0 {
+                return Err(ContractError::InvalidTreasuryAmount);
+            }
+        }
+
         let now = env.ledger().timestamp();
         let snapshot_ledger = env.ledger().sequence();
         let id = GovernanceStorage::proposal_count(&env);
@@ -247,6 +279,9 @@ impl GovernanceContract {
                 Some(a) => Vec::from_array(&env, [a]),
                 None => Vec::new(&env),
             },
+            choices: Vec::new(&env),
+            winning_choice: None,
+            cancellation_reason: None,
         };
 
         GovernanceStorage::set_proposal(&env, id, &proposal);
@@ -404,6 +439,7 @@ impl GovernanceContract {
         if GovernanceStorage::restrict_admin_vote(&env) {
             let admin = GovernanceStorage::admin(&env);
             if voter == admin && proposal.proposer == admin {
+                GovernanceEvents::admin_vote_restricted(&env, proposal_id, &admin, &proposal.proposer);
                 return Err(ContractError::AdminVoteRestricted);
             }
         }
@@ -417,13 +453,9 @@ impl GovernanceContract {
             return Err(ContractError::NoVotingPower);
         }
 
-        // Use the stored proposal snapshot ledger to read historical balances.
-        // Record the voter's snapshot balance as their voting weight. Delegated
-        // weight is not enumerated on-chain; off-chain tooling should provide
-        // delegator lists if needed. Using `balance_at` prevents manipulation
-        // of balances after proposal creation from affecting the tally.
-        let snapshot_ledger = proposal.snapshot_ledger as u64;
-        let weight = token_client.balance_at(&voter, &snapshot_ledger);
+        // Include the balances of accounts that delegated to this voter.
+        let delegators = token_client.get_delegators(&voter);
+        let weight = token_client.get_delegated_weight(&voter, &delegators);
         if weight <= 0 {
             return Err(ContractError::NoVotingPower);
         }
@@ -467,17 +499,32 @@ impl GovernanceContract {
         // i128::MAX (170_141_183_460_469_231_731_687_303_715_884_105_727). The token contract
         // enforces this via checked_add on mint, so total votes can never exceed total_supply.
         // checked_add is retained as a defence-in-depth guard.
-        match vote {
+        match &vote {
             Vote::Yes => proposal.votes_yes = proposal.votes_yes.checked_add(weight)
                 .ok_or(ContractError::ArithmeticOverflow)?,
             Vote::No => proposal.votes_no = proposal.votes_no.checked_add(weight)
                 .ok_or(ContractError::ArithmeticOverflow)?,
             Vote::Abstain => proposal.votes_abstain = proposal.votes_abstain.checked_add(weight)
                 .ok_or(ContractError::ArithmeticOverflow)?,
+            Vote::Choice(idx) => {
+                let current = GovernanceStorage::choice_votes(&env, proposal_id, *idx);
+                let updated = current.checked_add(weight)
+                    .ok_or(ContractError::ArithmeticOverflow)?;
+                GovernanceStorage::set_choice_votes(&env, proposal_id, *idx, updated);
+            }
         }
 
         GovernanceStorage::set_has_voted(&env, proposal_id, &voter, true);
         GovernanceStorage::set_vote_record(&env, proposal_id, &voter, &VoteRecord { vote: vote.clone(), weight });
+
+        // Enforce the voter cap before incrementing.
+        // cast_vote costs ~5 M instructions and ~4 ledger reads/writes.
+        // Capping at MAX_VOTER_COUNT keeps any future bulk operation in finalise
+        // within Soroban's per-tx resource limits (see docs/gas-budgeting.md).
+        if proposal.voter_count >= Self::MAX_VOTER_COUNT {
+            return Err(ContractError::MaxVotersReached);
+        }
+
         proposal.voter_count += 1;
         GovernanceStorage::set_proposal(&env, proposal_id, &proposal);
 
@@ -526,6 +573,10 @@ impl GovernanceContract {
             Vote::Yes => proposal.votes_yes -= record.weight,
             Vote::No => proposal.votes_no -= record.weight,
             Vote::Abstain => proposal.votes_abstain -= record.weight,
+            Vote::Choice(idx) => {
+                let current = GovernanceStorage::choice_votes(&env, proposal_id, idx);
+                GovernanceStorage::set_choice_votes(&env, proposal_id, idx, current - record.weight);
+            }
         }
 
         GovernanceStorage::set_has_voted(&env, proposal_id, &voter, false);
@@ -571,6 +622,10 @@ impl GovernanceContract {
             Vote::Yes => proposal.votes_yes -= record.weight,
             Vote::No => proposal.votes_no -= record.weight,
             Vote::Abstain => proposal.votes_abstain -= record.weight,
+            Vote::Choice(idx) => {
+                let current = GovernanceStorage::choice_votes(&env, proposal_id, idx);
+                GovernanceStorage::set_choice_votes(&env, proposal_id, idx, current - record.weight);
+            }
         }
         match new_vote {
             Vote::Yes => proposal.votes_yes = proposal.votes_yes.checked_add(record.weight)
@@ -579,6 +634,12 @@ impl GovernanceContract {
                 .ok_or(ContractError::ArithmeticOverflow)?,
             Vote::Abstain => proposal.votes_abstain = proposal.votes_abstain.checked_add(record.weight)
                 .ok_or(ContractError::ArithmeticOverflow)?,
+            Vote::Choice(idx) => {
+                let current = GovernanceStorage::choice_votes(&env, proposal_id, idx);
+                let updated = current.checked_add(record.weight)
+                    .ok_or(ContractError::ArithmeticOverflow)?;
+                GovernanceStorage::set_choice_votes(&env, proposal_id, idx, updated);
+            }
         }
 
         let old_vote = record.vote.clone();
@@ -707,7 +768,7 @@ impl GovernanceContract {
         if active_count > 0 {
             GovernanceStorage::set_active_proposal_count(&env, active_count - 1);
         }
-        GovernanceEvents::proposal_cancelled(&env, proposal_id, &admin, proposal.voter_count);
+        GovernanceEvents::proposal_cancelled(&env, proposal_id, &admin, proposal.voter_count, &reason);
         Ok(())
     }
 
@@ -722,15 +783,6 @@ impl GovernanceContract {
 
         env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
         GovernanceEvents::contract_upgraded(&env, &new_wasm_hash);
-        Ok(())
-    }
-
-    /// Upgrade the governance contract code. Admin only.
-    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) -> Result<(), ContractError> {
-        admin.require_auth();
-        Self::assert_admin(&env, &admin)?;
-
-        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
         GovernanceEvents::upgraded(&env, &new_wasm_hash);
         Ok(())
     }
@@ -759,6 +811,18 @@ impl GovernanceContract {
             return Err(ContractError::QuorumExceedsSupply);
         }
 
+        // Quorum floor check (issue #53)
+        let min_quorum_bps = GovernanceStorage::min_quorum_bps(&env);
+        if min_quorum_bps > 0 {
+            let floor = supply
+                .checked_mul(min_quorum_bps as i128)
+                .and_then(|v| v.checked_div(10_000))
+                .ok_or(ContractError::ArithmeticOverflow)?;
+            if new_quorum < floor {
+                return Err(ContractError::QuorumBelowFloor);
+            }
+        }
+
         let mut proposal = GovernanceStorage::proposal(&env, proposal_id)
             .ok_or(ContractError::ProposalNotFound)?;
 
@@ -766,11 +830,17 @@ impl GovernanceContract {
             return Err(ContractError::ProposalNotActive);
         }
 
-        // Time-lock: only allowed within the first 10% of the voting period.
+        // Time-lock: only allowed within the first 10% of the voting period
+        // AND at least QUORUM_TIMELOCK_SECS before the end.
+        // This prevents both late-stage manipulation and last-minute changes.
         let now = env.ledger().timestamp();
         let duration = proposal.end_time.saturating_sub(proposal.start_time);
         let window = duration / 10;
         if now > proposal.start_time + window {
+            return Err(ContractError::QuorumUpdateNotAllowed);
+        }
+        // Block updates within the final QUORUM_TIMELOCK_SECS of the voting period.
+        if proposal.end_time.saturating_sub(now) < QUORUM_TIMELOCK_SECS {
             return Err(ContractError::QuorumUpdateNotAllowed);
         }
 
@@ -806,7 +876,7 @@ impl GovernanceContract {
         }
 
         GovernanceStorage::set_pending_admin(&env, Some(&new_admin));
-        GovernanceEvents::admin_transfer_proposed(&env, &admin, &new_admin);
+        GovernanceEvents::admin_transfer_proposed(&env, &admin, &new_admin, env.ledger().timestamp());
         Ok(())
     }
 
@@ -845,7 +915,7 @@ impl GovernanceContract {
         let previous_admin = GovernanceStorage::admin(&env);
         GovernanceStorage::set_admin(&env, &pending_admin);
         GovernanceStorage::set_pending_admin(&env, None);
-        GovernanceEvents::admin_transfer_accepted(&env, &previous_admin, &pending_admin);
+        GovernanceEvents::admin_transfer_accepted(&env, &previous_admin, &pending_admin, env.ledger().timestamp());
         Ok(())
     }
 

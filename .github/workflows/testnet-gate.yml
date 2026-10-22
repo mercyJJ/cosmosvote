@@ -4,13 +4,25 @@ on:
   push:
     branches: [main]
 
+# Only run one deployment at a time; cancel any in-progress run if a newer
+# commit lands on main before the current deployment finishes.
+concurrency:
+  group: testnet-gate
+  cancel-in-progress: true
+
 jobs:
   testnet-smoke:
     name: Testnet Deploy & Smoke Test
     runs-on: ubuntu-latest
     environment: testnet
+
+    # Expose contract IDs as outputs so the summary step can read them
+    outputs:
+      token_contract_id: ${{ steps.deploy.outputs.token_contract_id }}
+      governance_contract_id: ${{ steps.deploy.outputs.governance_contract_id }}
+
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
@@ -18,16 +30,115 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
+      - name: Install Stellar CLI
+        run: |
+          cargo install stellar-cli --locked --version 21.4.0 2>/dev/null || true
+          stellar --version
+
       - name: Build WASM binaries
         run: cargo build --release --target wasm32-unknown-unknown
 
-      - name: Deploy to testnet
-        env:
-          STELLAR_SECRET_KEY: ${{ secrets.TESTNET_SECRET_KEY }}
-        run: bash scripts/deploy_testnet.sh
-
-      - name: Smoke test — token contract responds
+      - name: Deploy contracts to testnet
+        id: deploy
         env:
           STELLAR_SECRET_KEY: ${{ secrets.TESTNET_SECRET_KEY }}
         run: |
-          echo "Smoke tests passed (extend with contract invocations as needed)"
+          OUTPUT=$(bash scripts/deploy_testnet.sh 2>&1)
+          echo "$OUTPUT"
+
+          TOKEN_ID=$(echo "$OUTPUT"    | grep -oP '(?<=TOKEN_CONTRACT_ID=)\S+')
+          GOV_ID=$(echo "$OUTPUT"      | grep -oP '(?<=GOVERNANCE_CONTRACT_ID=)\S+')
+
+          echo "token_contract_id=${TOKEN_ID}"       >> "$GITHUB_OUTPUT"
+          echo "governance_contract_id=${GOV_ID}"    >> "$GITHUB_OUTPUT"
+          echo "TOKEN_CONTRACT_ID=${TOKEN_ID}"        >> "$GITHUB_ENV"
+          echo "GOVERNANCE_CONTRACT_ID=${GOV_ID}"     >> "$GITHUB_ENV"
+
+      # ── Smoke tests ──────────────────────────────────────────────────
+      # Each test calls a read-only function on the deployed contract and
+      # asserts a sensible (non-error) result.
+
+      - name: Smoke test — governance proposal_count
+        env:
+          STELLAR_SECRET_KEY: ${{ secrets.TESTNET_SECRET_KEY }}
+        run: |
+          echo "Querying proposal_count on governance contract ${GOVERNANCE_CONTRACT_ID} ..."
+          RESULT=$(stellar contract invoke \
+            --id "$GOVERNANCE_CONTRACT_ID" \
+            --source "$STELLAR_SECRET_KEY" \
+            --rpc-url https://soroban-testnet.stellar.org \
+            --network-passphrase "Test SDF Network ; September 2015" \
+            -- proposal_count 2>&1)
+          echo "proposal_count result: ${RESULT}"
+
+          # The contract should return a u32; any integer (including 0) is success.
+          if ! echo "$RESULT" | grep -qE '^[0-9]+$'; then
+            echo "ERROR: unexpected response from proposal_count: ${RESULT}" >&2
+            exit 1
+          fi
+
+      - name: Smoke test — token balance call responds
+        env:
+          STELLAR_SECRET_KEY: ${{ secrets.TESTNET_SECRET_KEY }}
+        run: |
+          ADMIN_ADDRESS=$(stellar keys address --secret-key "$STELLAR_SECRET_KEY" 2>/dev/null || \
+            stellar keys address "$STELLAR_SECRET_KEY")
+          echo "Querying balance on token contract ${TOKEN_CONTRACT_ID} for admin ${ADMIN_ADDRESS} ..."
+          RESULT=$(stellar contract invoke \
+            --id "$TOKEN_CONTRACT_ID" \
+            --source "$STELLAR_SECRET_KEY" \
+            --rpc-url https://soroban-testnet.stellar.org \
+            --network-passphrase "Test SDF Network ; September 2015" \
+            -- balance \
+            --id "$ADMIN_ADDRESS" 2>&1)
+          echo "balance result: ${RESULT}"
+
+          # Balance must be a non-negative integer.
+          if ! echo "$RESULT" | grep -qE '^[0-9]+$'; then
+            echo "ERROR: unexpected response from balance: ${RESULT}" >&2
+            exit 1
+          fi
+
+      # ── Deployment summary → commit status ───────────────────────────
+      - name: Post deployment summary as commit status
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TOKEN_ID="${{ steps.deploy.outputs.token_contract_id }}"
+          GOV_ID="${{ steps.deploy.outputs.governance_contract_id }}"
+          SHA="${{ github.sha }}"
+
+          if [[ "${{ job.status }}" == "success" ]]; then
+            STATE="success"
+            DESCRIPTION="Testnet deploy + smoke tests passed. Token: ${TOKEN_ID:0:12}… Gov: ${GOV_ID:0:12}…"
+          else
+            STATE="failure"
+            DESCRIPTION="Testnet deploy or smoke tests failed — check workflow logs."
+          fi
+
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${{ github.repository }}/statuses/${SHA}" \
+            -f state="${STATE}" \
+            -f description="${DESCRIPTION}" \
+            -f context="testnet-gate / deploy-and-smoke" \
+            -f target_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      # ── Failure notification ──────────────────────────────────────────
+      - name: Notify on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [[ -z "${SLACK_WEBHOOK_URL}" ]]; then
+            echo "SLACK_WEBHOOK_URL not configured — skipping Slack notification"
+            exit 0
+          fi
+
+          curl -sf -X POST "${SLACK_WEBHOOK_URL}" \
+            -H 'Content-Type: application/json' \
+            -d "{
+              \"text\": \"🚨 *CosmosVote testnet gate failed* on commit \`${{ github.sha }}\` by ${{ github.actor }}.\nSee: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"
+            }"

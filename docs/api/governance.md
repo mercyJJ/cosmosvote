@@ -54,9 +54,29 @@ gov.initialize(
 pub fn get_config(env: Env) -> GovernanceConfig
 ```
 
-Returns the current governance configuration as a `GovernanceConfig` struct.
+Returns the current governance configuration as a `GovernanceConfig` struct. This function requires no authentication and is callable by anyone (off-chain monitors, frontends, bots).
 
-**Returns:** `GovernanceConfig { admin, voting_token, min_proposal_balance, proposal_cooldown, restrict_admin_vote, paused }`
+**Returns:** `GovernanceConfig`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `admin` | `Address` | Current privileged admin address |
+| `voting_token` | `Address` | SEP-41 governance token contract address |
+| `min_proposal_balance` | `i128` | Minimum token balance required to create a proposal (`0` = no minimum) |
+| `proposal_cooldown` | `u64` | Minimum seconds between proposals per address (`0` = no cooldown) |
+| `restrict_admin_vote` | `bool` | If `true`, admin cannot vote on own proposals |
+| `paused` | `bool` | Whether the contract is currently paused |
+
+**Authentication:** None — this is a read-only query callable without auth.
+
+**Example**
+
+```rust
+let config = gov.get_config();
+assert_eq!(config.admin, admin_address);
+assert_eq!(config.min_proposal_balance, 1_000_000i128);
+assert_eq!(config.paused, false);
+```
 
 ---
 
@@ -192,6 +212,7 @@ Vote weight equals the voter's token balance at the proposal's `snapshot_ledger`
 | 24 | `AlreadyVoted` | Voter has already voted on this proposal |
 | 25 | `NoVotingPower` | Voter's balance at snapshot is 0 |
 | 26 | `AdminVoteRestricted` | Admin tried to vote on own proposal with `restrict_admin_vote = true` |
+| 61 | `MaxVotersReached` | Proposal has reached the `MAX_VOTER_COUNT` (10 000) unique voter limit |
 
 **Example**
 
@@ -383,3 +404,4 @@ Read-only accessors for admin address, pending admin (if any), and contract vers
 | 40 | `ContractPaused` | Contract is paused |
 | 41 | `NotPaused` | Contract is not paused |
 | 50 | `ArithmeticOverflow` | Integer overflow |
+| 61 | `MaxVotersReached` | Proposal has reached the `MAX_VOTER_COUNT` (10 000) unique voter limit |

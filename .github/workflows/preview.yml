@@ -5,17 +5,20 @@ on:
     branches: [main]
     paths:
       - "frontend/**"
+    types: [opened, synchronize, reopened, closed]
 
 permissions:
   contents: read
-  pull-requests: write
+  pull-requests: write   # post the preview URL as a PR comment
 
 jobs:
+  # ── Deploy preview on open / push ─────────────────────────────────────
   deploy-preview:
     name: Deploy Frontend Preview
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -52,3 +55,89 @@ jobs:
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+
+      - name: Post preview URL as PR comment
+        if: steps.netlify.outputs.deploy-url != ''
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const url = '${{ steps.netlify.outputs.deploy-url }}';
+            const prNumber = context.payload.pull_request.number;
+            const sha = context.payload.pull_request.head.sha.substring(0, 7);
+
+            // Delete any previous preview comment from this bot to keep the thread clean
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+            for (const comment of comments) {
+              if (comment.user.type === 'Bot' && comment.body.includes('🚀 Preview deployment')) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: comment.id,
+                });
+              }
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: [
+                '### 🚀 Preview deployment ready',
+                '',
+                `**URL:** ${url}`,
+                `**Commit:** \`${sha}\``,
+                `**Network:** testnet`,
+                '',
+                '_This preview is automatically deleted when the PR is closed._',
+              ].join('\n'),
+            });
+
+  # ── Tear down preview on PR close / merge ─────────────────────────────
+  teardown-preview:
+    name: Tear Down Preview
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete Netlify preview deployment
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          ALIAS="pr-${PR_NUMBER}"
+          echo "Deleting Netlify preview alias: ${ALIAS}"
+
+          # Resolve alias → deploy ID, then delete it
+          DEPLOY_ID=$(curl -sf \
+            -H "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}" \
+            "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/deploys?per_page=50" \
+            | jq -r --arg alias "$ALIAS" \
+              '.[] | select(.deploy_ssl_url | test($alias)) | .id' \
+            | head -1)
+
+          if [[ -n "$DEPLOY_ID" ]]; then
+            curl -sf -X DELETE \
+              -H "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}" \
+              "https://api.netlify.com/api/v1/deploys/${DEPLOY_ID}"
+            echo "Deleted deploy ${DEPLOY_ID}"
+          else
+            echo "No preview deploy found for alias ${ALIAS} — nothing to delete"
+          fi
+
+      - name: Post teardown notice as PR comment
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: '🗑️ **Preview environment deleted** — this PR has been closed.',
+            });

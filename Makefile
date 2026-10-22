@@ -29,7 +29,7 @@ test-prop:
 
 ## Run integration tests only
 test-integration:
-	cargo test --test integration_tests --features testutils
+	cargo test -p cosmosvote-governance --test delegation_vote_weight_tests --features testutils
 
 ## Format code
 fmt:

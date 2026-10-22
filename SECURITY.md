@@ -64,3 +64,7 @@ All dependencies are scanned automatically on every CI run and weekly:
 ## Audit Status
 
 See [AUDIT.md](./AUDIT.md) for audit history and scope.
+
+## Incident Response
+
+For documented response procedures covering admin key compromise, critical contract bugs, and RPC denial-of-service, see the [Incident Response section](./docs/runbook.md#incident-response) of the operational runbook.

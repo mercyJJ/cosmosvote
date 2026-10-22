@@ -3,6 +3,8 @@
 Use this template for every production incident that causes user-visible impact or requires an emergency response. Complete all sections within 48 hours of resolution.
 
 > **How to use:** copy this file to `docs/postmortems/YYYY-MM-DD-<slug>.md`, fill in each section, and open a PR for team review. Blameless culture — focus on systems and processes, not individuals.
+>
+> **Example:** See [docs/postmortems/2024-03-15-rpc-outage.md](./postmortems/2024-03-15-rpc-outage.md) for a fully completed hypothetical postmortem covering an RPC outage incident.
 
 ---
 

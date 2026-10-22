@@ -9,6 +9,8 @@ export interface Proposal {
   title: string;
   description: string;
   cancellation_reason?: string | null;
+  /** Off-chain discussion link (e.g. forum thread). Must be HTTPS when present. */
+  discussion_url?: string | null;
   votes_yes: bigint;
   votes_no: bigint;
   votes_abstain: bigint;
@@ -16,6 +18,15 @@ export interface Proposal {
   start_time: bigint;
   end_time: bigint;
   state: ProposalState;
+  /**
+   * Optional named choices for multi-choice proposals.
+   * When non-empty, the frontend renders a choice list instead of the
+   * standard Yes / No / Abstain buttons, and submits Vote::Choice(index)
+   * to the contract.
+   *
+   * Issue #14: Add multi-choice proposal voting UI.
+   */
+  choices?: string[];
 }
 
 export interface VoteRecord {

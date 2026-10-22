@@ -1,0 +1,135 @@
+/* TreasurySkeleton.module.css
+   Skeleton dimensions mirror the expected Treasury tab layout so the
+   transition from skeleton → content causes no layout shift.
+*/
+
+.container {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+/* ── Heading ── */
+.headingSkeleton {
+  height: 1.25rem;
+  width: 140px;
+  margin-bottom: 1rem;
+}
+
+/* ── Balance card ── */
+.balanceCard {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.balanceLabelSkeleton {
+  height: 0.75rem;
+  width: 100px;
+}
+
+.balanceValueSkeleton {
+  height: 2rem;
+  width: 180px;
+}
+
+.balanceSubSkeleton {
+  height: 0.7rem;
+  width: 120px;
+}
+
+/* ── Asset rows ── */
+.assetRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.assetRow:last-of-type {
+  border-bottom: none;
+}
+
+.assetLeft {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.assetIconSkeleton {
+  height: 2rem;
+  width: 2rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.assetNameSkeleton {
+  height: 0.875rem;
+  width: 80px;
+  margin-bottom: 4px;
+}
+
+.assetSymbolSkeleton {
+  height: 0.7rem;
+  width: 40px;
+}
+
+.assetRight {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.assetAmountSkeleton {
+  height: 0.875rem;
+  width: 90px;
+}
+
+.assetUsdSkeleton {
+  height: 0.7rem;
+  width: 60px;
+}
+
+/* ── Footer totals ── */
+.footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 2px solid #e2e8f0;
+}
+
+.footerLabelSkeleton {
+  height: 0.875rem;
+  width: 80px;
+}
+
+.footerValueSkeleton {
+  height: 1rem;
+  width: 120px;
+}
+
+/* ── Mobile ── */
+@media (max-width: 480px) {
+  .container {
+    padding: 1rem;
+  }
+
+  .balanceValueSkeleton {
+    width: 140px;
+  }
+
+  .assetNameSkeleton {
+    width: 60px;
+  }
+}

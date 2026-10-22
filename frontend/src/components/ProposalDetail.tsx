@@ -10,12 +10,22 @@
  *     element so screen readers immediately announce the outcome.
  *   - Focus trap and Escape-to-close behaviour are preserved.
  *   - Focus is returned to the triggering element on unmount.
+ *
+ * Issue #15: Real-time tally polling
+ *   - usePolling re-fetches tally data every VITE_TALLY_POLL_INTERVAL ms (default 15 s)
+ *     while the proposal is Active.
+ *   - Polling stops when the component unmounts or the proposal is no longer Active.
+ *   - A "Updated X seconds ago" timestamp is shown in the UI.
  */
 import type { Proposal } from '../types';
-import { fetchHasVoted, fetchVoteRecord } from '../api';
-import { useEffect, useRef, useState } from 'react';
-import { formatTokenAmount, maskAddress } from '../utils';
+import { fetchHasVoted, fetchVoteRecord, fetchProposal } from '../api';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { formatTokenAmount, maskAddress, sanitizeWalletMessage } from '../utils';
 import { explorerAccountUrl } from '../config';
+import { usePolling } from '../hooks/usePolling';
+
+/** Polling interval in ms — configurable via VITE_TALLY_POLL_INTERVAL, default 15 s. */
+const TALLY_POLL_INTERVAL = Number(import.meta.env.VITE_TALLY_POLL_INTERVAL ?? 15_000);
 
 interface Props {
   proposal: Proposal;
@@ -46,12 +56,26 @@ const VOTE_CONFIG: Array<{
 ];
 
 export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddress, onClose, triggerRef }: Props) {
+  // Get signTransaction from the wallet store so votes can be signed by the real wallet.
+  const { signTransaction } = useWallet();
+
   const [hasVoted, setHasVoted] = useState<boolean | null>(null);
   const [voteRecord, setVoteRecord] = useState<{ vote: string; weight: bigint } | null>(null);
   const [isVoting, setIsVoting] = useState(false);
   const [voteConfirmation, setVoteConfirmation] = useState<string | null>(null);
   const [voteError, setVoteError] = useState<string | null>(null);
   const [showFullProposer, setShowFullProposer] = useState(false);
+  // For multi-choice proposals: the index the user has selected (null = none selected yet)
+  const [selectedChoiceIndex, setSelectedChoiceIndex] = useState<number | null>(null);
+
+  // Live tally — starts from the prop and updates via polling
+  const [tally, setTally] = useState<{ yes: bigint; no: bigint; abstain: bigint }>({
+    yes: p.votes_yes,
+    no: p.votes_no,
+    abstain: p.votes_abstain,
+  });
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [secondsAgo, setSecondsAgo] = useState<number | null>(null);
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -59,6 +83,27 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
   const confirmationRef = useRef<HTMLDivElement>(null);
 
   const isProposalActive = p.state === 'Active';
+
+  // Fetch latest tally from chain
+  const fetchTally = useCallback(async () => {
+    const fresh = await fetchProposal(Number(p.id));
+    setTally({ yes: fresh.votes_yes, no: fresh.votes_no, abstain: fresh.votes_abstain });
+    setLastUpdated(new Date());
+  }, [p.id]);
+
+  // Poll every TALLY_POLL_INTERVAL ms while Active
+  usePolling(fetchTally, { interval: TALLY_POLL_INTERVAL, enabled: isProposalActive });
+
+  // Update "X seconds ago" display every second
+  useEffect(() => {
+    if (!lastUpdated) return;
+    const tick = () => {
+      setSecondsAgo(Math.floor((Date.now() - lastUpdated.getTime()) / 1000));
+    };
+    tick();
+    const id = setInterval(tick, 1_000);
+    return () => clearInterval(id);
+  }, [lastUpdated]);
   const now = BigInt(Math.floor(Date.now() / 1000));
   const votingOpen = isProposalActive && now >= p.start_time && now <= p.end_time;
   const canVote = !!walletAddress && votingOpen && hasVoted === false && !isVoting;
@@ -77,6 +122,25 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
       setVoteRecord(null);
     });
   }, [p.id, walletAddress]);
+
+  // Fetch voting power (own balance + delegated weight) — issue #20
+  useEffect(() => {
+    if (!walletAddress) return;
+    setVotingPowerLoading(true);
+    Promise.all([
+      fetchTokenBalance(walletAddress),
+      fetchDelegatedWeight(walletAddress, []),
+    ])
+      .then(([balance, delegated]) => {
+        setOwnBalance(balance);
+        setDelegatedWeight(delegated);
+      })
+      .catch(() => {
+        setOwnBalance(BigInt(0));
+        setDelegatedWeight(BigInt(0));
+      })
+      .finally(() => setVotingPowerLoading(false));
+  }, [walletAddress]);
 
   // Focus the close button when the dialog opens
   useEffect(() => {
@@ -148,21 +212,38 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [onClose, canVote]);  // re-bind when canVote changes so shortcuts stay accurate
 
-  const total = p.votes_yes + p.votes_no + p.votes_abstain;
+  const total = tally.yes + tally.no + tally.abstain;
   const shortAddress = maskAddress(p.proposer);
+  const hasChoices = Array.isArray(p.choices) && p.choices.length > 0;
 
-  // Simulated vote submission — real implementation would call castVote via SDK
-  async function handleVote(voteType: VoteChoice) {
-    if (!canVote) return;
+  // Wallet-facing message fields are sanitized to ASCII-safe characters so that
+  // frontend-supplied proposal content cannot inject misleading content into
+  // wallet prompts or vote memos (see docs/wallet-message-sanitization.md).
+  const safeTitle = sanitizeWalletMessage(p.title);
+  const safeDescription = sanitizeWalletMessage(p.description);
+  const safeChoices = hasChoices
+    ? (p.choices ?? []).map(choice => sanitizeWalletMessage(choice))
+    : [];
+
+  // Submit a vote via the connected wallet. Signs and broadcasts a real Soroban transaction.
+  async function handleVote(voteInput: VoteInput) {
+    if (!canVote || !walletAddress) return;
     setIsVoting(true);
     setVoteError(null);
     setVoteConfirmation(null);
     try {
-      // Placeholder: actual SDK castVote call would go here
-      await new Promise<void>(res => setTimeout(res, 800));
+      await castVote(walletAddress, Number(p.id), voteInput, signTransaction);
       setHasVoted(true);
-      setVoteRecord({ vote: voteType, weight: BigInt(0) });
-      setVoteConfirmation(`Your vote "${voteType}" on proposal #${String(p.id)} has been submitted.`);
+      const voteLabel =
+        typeof voteInput === 'object' && 'choice' in voteInput
+          ? (safeChoices[voteInput.choice] ?? `Choice ${voteInput.choice}`)
+          : voteInput;
+      setVoteRecord({ vote: voteLabel, weight: BigInt(0) });
+      setVoteConfirmation(
+        sanitizeWalletMessage(
+          `Your vote "${voteLabel}" on proposal #${String(p.id)} has been submitted.`,
+        ),
+      );
     } catch (e) {
       setVoteError(`Vote failed: ${e instanceof Error ? e.message : 'unknown error'}`);
     } finally {
@@ -187,6 +268,8 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
         style={{ background: '#fff', borderRadius: 12, padding: '2rem', maxWidth: 600, width: '90%', maxHeight: '80vh', overflowY: 'auto' }}
         onClick={e => e.stopPropagation()}
       >
+        {/* Skeleton pulse animation */}
+        <style>{`@keyframes pulse{0%,100%{background-position:100% 50%}50%{background-position:0% 50%}}`}</style>
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
           <h2 id="proposal-dialog-title" style={{ margin: 0 }}>Proposal #{String(p.id)}</h2>
@@ -198,8 +281,34 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
           >×</button>
         </div>
 
-        <h3 style={{ margin: '0 0 0.5rem' }}>{p.title}</h3>
-        <p style={{ color: '#555' }}>{p.description}</p>
+        <h3 style={{ margin: '0 0 0.5rem' }}>{safeTitle}</h3>
+        <p style={{ color: '#555' }}>{safeDescription}</p>
+
+        {/* Discussion link — shown only when discussion_url is a valid HTTPS URL */}
+        {p.discussion_url && /^https:\/\/.+/.test(p.discussion_url) && (
+          <p style={{ marginBottom: '1rem' }}>
+            <a
+              href={p.discussion_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.25rem',
+                padding: '0.375rem 0.75rem',
+                background: '#eff6ff',
+                border: '1px solid #bfdbfe',
+                borderRadius: 6,
+                color: '#1d4ed8',
+                textDecoration: 'none',
+                fontSize: '0.875rem',
+                fontWeight: 500,
+              }}
+            >
+              💬 Discussion
+            </a>
+          </p>
+        )}
 
         {/* Details table */}
         <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '1rem' }}>
@@ -239,6 +348,38 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
           </tbody>
         </table>
 
+        {/* Live tally — updated via polling while Active */}
+        {isProposalActive && (
+          <div style={{ marginBottom: '1rem', padding: '0.75rem', background: 'var(--bg-vote-cell, #f9fafb)', borderRadius: 8, border: '1px solid var(--border-color, #e5e7eb)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-primary, #1e293b)' }}>Live Tally</span>
+              {secondsAgo !== null && (
+                <span
+                  aria-live="polite"
+                  aria-atomic="true"
+                  style={{ fontSize: '0.75rem', color: 'var(--text-muted, #888)' }}
+                >
+                  Updated {secondsAgo}s ago
+                </span>
+              )}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem', textAlign: 'center' }}>
+              <div>
+                <div style={{ fontSize: '1rem', fontWeight: 700, color: '#16a34a' }}>{formatTokenAmount(tally.yes, decimals)}</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted, #888)' }}>Yes</div>
+              </div>
+              <div>
+                <div style={{ fontSize: '1rem', fontWeight: 700, color: '#dc2626' }}>{formatTokenAmount(tally.no, decimals)}</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted, #888)' }}>No</div>
+              </div>
+              <div>
+                <div style={{ fontSize: '1rem', fontWeight: 700, color: '#6b7280' }}>{formatTokenAmount(tally.abstain, decimals)}</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted, #888)' }}>Abstain</div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ── Vote confirmation message (receives focus after vote) ── */}
         {voteConfirmation && (
           <div
@@ -274,6 +415,79 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
         {/* ── Vote section ── */}
         {walletAddress && (
           <div style={{ padding: '0.75rem', background: '#f0f9ff', borderRadius: 8, fontSize: '0.875rem', marginBottom: '1rem' }}>
+            {/* Voting power panel — issue #20 */}
+            {hasVoted === false && isProposalActive && (
+              <div
+                style={{
+                  background: '#fff',
+                  border: '1px solid #bfdbfe',
+                  borderRadius: 6,
+                  padding: '0.6rem 0.85rem',
+                  marginBottom: '0.75rem',
+                  fontSize: '0.8rem',
+                }}
+              >
+                <div style={{ fontWeight: 600, color: '#1e40af', marginBottom: '0.35rem' }}>
+                  🗳️ Your Voting Power
+                </div>
+                {votingPowerLoading ? (
+                  <div
+                    aria-busy="true"
+                    aria-label="Loading voting power"
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.3rem',
+                    }}
+                  >
+                    {/* Skeleton lines */}
+                    {[100, 80].map(w => (
+                      <div
+                        key={w}
+                        style={{
+                          height: 12,
+                          width: `${w}%`,
+                          background: 'linear-gradient(90deg,#e0e7ff 25%,#c7d2fe 50%,#e0e7ff 75%)',
+                          backgroundSize: '200% 100%',
+                          borderRadius: 4,
+                          animation: 'pulse 1.4s ease-in-out infinite',
+                        }}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
+                      <span>
+                        <span style={{ color: '#64748b' }}>Own balance: </span>
+                        <strong>{ownBalance !== null ? formatTokenAmount(ownBalance, decimals) : '—'}</strong>
+                      </span>
+                      <span>
+                        <span style={{ color: '#64748b' }}>Delegated: </span>
+                        <strong>{delegatedWeight !== null ? formatTokenAmount(delegatedWeight, decimals) : '—'}</strong>
+                      </span>
+                    </div>
+                    {ownBalance !== null && delegatedWeight !== null && ownBalance + delegatedWeight === BigInt(0) && (
+                      <div
+                        role="alert"
+                        style={{
+                          marginTop: '0.5rem',
+                          padding: '0.4rem 0.6rem',
+                          background: '#fef9c3',
+                          border: '1px solid #fde047',
+                          borderRadius: 5,
+                          color: '#78350f',
+                          fontWeight: 500,
+                        }}
+                      >
+                        ⚠️ You have 0 voting power. Acquire CVT tokens or receive a delegation to vote.
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
             {hasVoted === null && <span>Checking vote status…</span>}
 
             {hasVoted && voteRecord && !voteConfirmation && (
@@ -285,38 +499,115 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
 
             {hasVoted === false && isProposalActive && (
               <>
-                {/* Keyboard shortcut hint */}
-                <p
-                  id="vote-shortcut-hint"
-                  style={{ margin: '0 0 0.5rem', color: '#374151' }}
-                >
-                  Cast your vote{' '}
-                  <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>
-                    (keyboard shortcuts: <kbd>Y</kbd> Yes · <kbd>N</kbd> No · <kbd>A</kbd> Abstain)
-                  </span>
-                </p>
+                {hasChoices ? (
+                  /* ── Multi-choice vote UI ── */
+                  <fieldset
+                    style={{ border: 'none', padding: 0, margin: 0 }}
+                    aria-labelledby="choice-legend"
+                    disabled={!canVote || isVoting}
+                  >
+                    <legend
+                      id="choice-legend"
+                      style={{ margin: '0 0 0.5rem', color: '#374151', fontWeight: 500, fontSize: '0.875rem' }}
+                    >
+                      Select your choice:
+                    </legend>
+                    <ul
+                      role="radiogroup"
+                      aria-labelledby="choice-legend"
+                      style={{ listStyle: 'none', padding: 0, margin: '0 0 0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}
+                    >
+                      {safeChoices.map((choiceLabel, idx) => {
+                        const inputId = `choice-${String(p.id)}-${idx}`;
+                        const isSelected = selectedChoiceIndex === idx;
+                        return (
+                          <li key={idx}>
+                            <label
+                              htmlFor={inputId}
+                              style={{
+                                display: 'flex', alignItems: 'center', gap: '0.5rem',
+                                padding: '0.6rem 0.75rem',
+                                border: `2px solid ${isSelected ? '#2563eb' : '#e5e7eb'}`,
+                                borderRadius: 6,
+                                cursor: canVote && !isVoting ? 'pointer' : 'not-allowed',
+                                background: isSelected ? '#eff6ff' : '#fff',
+                                fontSize: '0.875rem',
+                              }}
+                            >
+                              <input
+                                id={inputId}
+                                type="radio"
+                                name={`proposal-${String(p.id)}-choice`}
+                                value={idx}
+                                checked={isSelected}
+                                disabled={!canVote || isVoting}
+                                onChange={() => setSelectedChoiceIndex(idx)}
+                                aria-label={choiceLabel}
+                                style={{ accentColor: '#2563eb' }}
+                              />
+                              {choiceLabel}
+                            </label>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    <button
+                      onClick={() => {
+                        if (selectedChoiceIndex !== null) {
+                          void handleVote({ choice: selectedChoiceIndex });
+                        }
+                      }}
+                      disabled={!canVote || isVoting || selectedChoiceIndex === null}
+                      aria-disabled={!canVote || isVoting || selectedChoiceIndex === null}
+                      style={{
+                        padding: '0.6rem 1.25rem',
+                        background: !canVote || isVoting || selectedChoiceIndex === null ? '#e5e7eb' : '#2563eb',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: 6,
+                        cursor: !canVote || isVoting || selectedChoiceIndex === null ? 'not-allowed' : 'pointer',
+                        fontWeight: 600,
+                        fontSize: '0.875rem',
+                      }}
+                    >
+                      {isVoting ? 'Submitting…' : 'Submit Vote'}
+                    </button>
+                  </fieldset>
+                ) : (
+                  /* ── Standard Yes / No / Abstain vote UI ── */
+                  <>
+                    {/* Keyboard shortcut hint */}
+                    <p
+                      id="vote-shortcut-hint"
+                      style={{ margin: '0 0 0.5rem', color: '#374151' }}
+                    >
+                      Cast your vote{' '}
+                      <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+                        (keyboard shortcuts: <kbd>Y</kbd> Yes · <kbd>N</kbd> No · <kbd>A</kbd> Abstain)
+                      </span>
+                    </p>
 
-                {/* Vote buttons */}
-                <div
-                  role="group"
-                  aria-labelledby="vote-shortcut-hint"
-                  style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem' }}
-                >
-                  {VOTE_CONFIG.map(({ vote, label, shortcut, emoji, color, shortcutKey }) => {
-                    const isCurrentVote = voteRecord?.vote === vote;
-                    const isDisabled = !canVote;
+                    {/* Vote buttons */}
+                    <div
+                      role="group"
+                      aria-labelledby="vote-shortcut-hint"
+                      style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem' }}
+                    >
+                      {VOTE_CONFIG.map(({ vote, label, shortcut, emoji, color, shortcutKey }) => {
+                        const isCurrentVote = voteRecord?.vote === vote;
+                        const isDisabled = !canVote;
 
-                    return (
-                      <button
-                        key={vote}
-                        onClick={() => void handleVote(vote)}
-                        // aria-pressed reflects whether this choice is the user's current vote
-                        aria-pressed={isCurrentVote}
-                        // aria-disabled communicates the disabled state to screen readers
-                        // without removing the button from the tab order
-                        aria-disabled={isDisabled || isVoting}
-                        // Keyboard shortcut documented for AT users
-                        aria-keyshortcuts={shortcutKey}
+                        return (
+                          <button
+                            key={vote}
+                            onClick={() => void handleVote(vote)}
+                            // aria-pressed reflects whether this choice is the user's current vote
+                            aria-pressed={isCurrentVote}
+                            // aria-disabled communicates the disabled state to screen readers
+                            // without removing the button from the tab order
+                            aria-disabled={isDisabled || isVoting}
+                            // Keyboard shortcut documented for AT users
+                            aria-keyshortcuts={shortcutKey}
                         // Tooltip explains shortcut and disabled reason
                         title={
                           isVoting
@@ -348,6 +639,8 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
                     );
                   })}
                 </div>
+                  </>
+                )}
               </>
             )}
           </div>
@@ -358,6 +651,17 @@ export function ProposalDetail({ proposal: p, decimals, walletAddress, adminAddr
           <div style={{ padding: '0.75rem', background: '#fef3c7', borderRadius: 8, fontSize: '0.875rem', color: '#92400e' }}>
             ℹ️ Connect your wallet to vote on this proposal
           </div>
+        )}
+
+        {/* ── Vote Simulation Preview (Active proposals only) ── */}
+        {/* Rendered for Active proposals regardless of wallet connection so
+            users can see an estimate before connecting. When walletAddress is
+            present the preview reflects the user's pending vote in real time. */}
+        {isProposalActive && walletAddress && hasVoted === false && (
+          <VoteSimulationPreview
+            proposalId={Number(p.id)}
+            walletAddress={walletAddress}
+          />
         )}
 
         {/* Already voted confirmation (when loaded from chain, not just submitted) */}

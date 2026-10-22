@@ -1,4 +1,5 @@
 import { FaucetClaimStore, createFaucetServer, readFaucetConfig } from './faucet';
+import { isOriginAllowed } from './cors';
 
 const config = readFaucetConfig(process.env);
 if (!config) throw new Error('Set FAUCET_ENABLED=true to start the faucet service.');

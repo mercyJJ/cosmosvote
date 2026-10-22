@@ -708,3 +708,126 @@ fn test_delegate_b_to_c_c_to_b_detected() {
     let result = token.try_delegate(&user_c, &user_b);
     assert_eq!(result, Err(Ok(ContractError::DelegationCycle)));
 }
+
+// ---------------------------------------------------------------------------
+// balance_at snapshot — issue #52 (flash-loan protection)
+// ---------------------------------------------------------------------------
+
+/// balance_at returns the snapshot stored at the given ledger when one exists.
+#[test]
+fn test_balance_at_returns_snapshot() {
+    let env = Env::default();
+    let (token, admin, user) = setup(&env);
+
+    // Snapshot ledger: record the ledger at which we transfer tokens to user.
+    let snapshot_ledger = env.ledger().sequence();
+    token.transfer(&admin, &user, &10_000_000i128);
+
+    // balance_at(snapshot_ledger) must return the user's balance at that ledger.
+    let snap = token.balance_at(&user, &(snapshot_ledger as u64));
+    assert_eq!(snap, 10_000_000, "snapshot should equal balance after transfer");
+}
+
+/// balance_at falls back to live balance when no snapshot exists for the ledger.
+#[test]
+fn test_balance_at_fallback_to_live_balance() {
+    let env = Env::default();
+    let (token, admin, user) = setup(&env);
+
+    // A ledger far in the past with no recorded snapshot.
+    let past_ledger: u64 = 1;
+    let live = token.balance(&admin);
+    let result = token.balance_at(&admin, &past_ledger);
+    // Falls back to live balance because no snapshot exists for ledger 1.
+    assert_eq!(result, live);
+
+    // Give user some tokens then check their fallback.
+    token.transfer(&admin, &user, &5_000_000i128);
+    let result2 = token.balance_at(&user, &past_ledger);
+    assert_eq!(result2, 5_000_000, "fallback for user with no old snapshot = live balance");
+}
+
+/// Flash-loan simulation:
+///   1. Attacker buys tokens (at ledger N).
+///   2. Proposal snapshot was taken at ledger N-1 (before purchase).
+///   3. Governance uses balance_at(snapshot_ledger) → vote weight = 0.
+///   4. Attacker "repays" (burns/transfers back) at ledger N+1.
+///
+/// The snapshot at the proposal ledger reflects the pre-purchase state,
+/// so the attacker cannot manipulate the vote tally.
+#[test]
+fn test_flash_loan_simulation_vote_weight_is_zero() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let id = env.register(crate::TokenContract, ());
+    let token = crate::TokenContractClient::new(&env, &id);
+    token.initialize(
+        &admin,
+        &100_000_000i128,
+        &String::from_slice(&env, "CosmosVote"),
+        &String::from_slice(&env, "VOTE"),
+        &7u32,
+    );
+
+    // Ledger 1: proposal created — snapshot taken here.
+    // Attacker has 0 balance at this point.
+    env.ledger().with_mut(|l| l.sequence_number = 1);
+    let proposal_snapshot_ledger: u64 = 1;
+
+    // Verify attacker has zero balance at proposal snapshot.
+    assert_eq!(
+        token.balance_at(&attacker, &proposal_snapshot_ledger),
+        0,
+        "attacker should have no balance at snapshot ledger"
+    );
+
+    // Ledger 2: attacker obtains tokens AFTER snapshot (flash loan / buy).
+    env.ledger().with_mut(|l| l.sequence_number = 2);
+    token.transfer(&admin, &attacker, &50_000_000i128);
+    assert_eq!(token.balance(&attacker), 50_000_000, "attacker now holds tokens");
+
+    // Governance queries balance_at(proposal_snapshot_ledger=1) for vote weight.
+    let vote_weight = token.balance_at(&attacker, &proposal_snapshot_ledger);
+    assert_eq!(
+        vote_weight, 0,
+        "vote weight at snapshot ledger must be 0 — flash-loan protection works"
+    );
+
+    // Ledger 3: attacker repays (transfers back) — mirroring flash-loan repayment.
+    env.ledger().with_mut(|l| l.sequence_number = 3);
+    token.transfer(&attacker, &admin, &50_000_000i128);
+    assert_eq!(token.balance(&attacker), 0, "attacker repaid tokens");
+
+    // Vote weight at proposal snapshot is still 0 even after repayment.
+    let vote_weight_after = token.balance_at(&attacker, &proposal_snapshot_ledger);
+    assert_eq!(
+        vote_weight_after, 0,
+        "vote weight must remain 0 after repayment — snapshot is immutable"
+    );
+}
+
+/// Snapshot is recorded at EACH ledger where balance changes,
+/// allowing governance to query any specific ledger.
+#[test]
+fn test_snapshot_recorded_at_multiple_ledgers() {
+    let env = Env::default();
+    let (token, admin, user) = setup(&env);
+
+    // Ledger 10: first transfer
+    env.ledger().with_mut(|l| l.sequence_number = 10);
+    token.transfer(&admin, &user, &1_000_000i128);
+
+    // Ledger 20: second transfer
+    env.ledger().with_mut(|l| l.sequence_number = 20);
+    token.transfer(&admin, &user, &2_000_000i128);
+
+    // Snapshot at ledger 10 should reflect balance after first transfer.
+    assert_eq!(token.balance_at(&user, &10), 1_000_000);
+    // Snapshot at ledger 20 should reflect cumulative balance.
+    assert_eq!(token.balance_at(&user, &20), 3_000_000);
+    // Live balance also matches.
+    assert_eq!(token.balance(&user), 3_000_000);
+}

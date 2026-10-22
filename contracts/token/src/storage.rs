@@ -22,12 +22,18 @@ pub enum PersistentKey {
     Balance(Address),
     /// Maps delegator → delegate (who holds their voting power).
     Delegation(Address),
+    /// Maps a delegate → the addresses delegating voting power to them.
+    Delegators(Address),
 }
 
 #[soroban_sdk::contracttype]
 #[derive(Clone)]
 pub enum TempKey {
     Allowance(Address, Address),
+    /// Balance snapshot: (owner, ledger_sequence) → i128.
+    /// Stored in Temporary storage so it expires naturally after the TTL window,
+    /// matching the typical governance proposal lifecycle (~30 days).
+    BalanceSnapshot(Address, u32),
 }
 
 #[soroban_sdk::contracttype]
@@ -43,6 +49,11 @@ impl TokenStorage {
     // Amount of ledgers to extend persistent entries by (30 days)
     pub const PERSISTENT_BUMP_AMOUNT: u32 = 518_400; // ~30 days @ 5s/ledger
     pub const PERSISTENT_THRESHOLD: u32 = 17_280;   // ~1 day @ 5s/ledger
+
+    /// Snapshot TTL: ~30 days — must cover the full proposal voting window.
+    pub const SNAPSHOT_TTL_LEDGERS: u32 = 518_400;
+    /// Snapshot minimum lifetime before extension: ~1 day.
+    pub const SNAPSHOT_TTL_THRESHOLD: u32 = 17_280;
 
     fn bump_persistent_ttl(env: &Env, key: &PersistentKey) {
         env.storage()
@@ -136,13 +147,32 @@ impl TokenStorage {
         let key = PersistentKey::Balance(owner.clone());
         env.storage().persistent().set(&key, &v);
         Self::bump_persistent_ttl(env, &key);
+
+        // Automatically snapshot the new balance at the current ledger so that
+        // balance_at(ledger) queries from governance can retrieve it later for
+        // flash-loan protection (issue #52).
+        let current_ledger = env.ledger().sequence();
+        Self::set_balance_snapshot(env, owner, current_ledger, v);
     }
 
-    pub fn is_paused(env: &Env) -> bool {
-        env.storage().instance().get(&InstanceKey::Paused).unwrap_or(false)
-    }
-    pub fn set_paused(env: &Env, v: bool) {
-        env.storage().instance().set(&InstanceKey::Paused, &v);
+    // -----------------------------------------------------------------------
+    // Balance snapshots (Temporary storage, issue #52)
+    // -----------------------------------------------------------------------
+
+    /// Write a balance snapshot for `owner` at `ledger` into Temporary storage.
+    ///
+    /// Snapshotting is performed automatically in `set_balance` whenever the
+    /// balance changes; callers should not need to call this directly.
+    ///
+    /// The entry is stored in Temporary storage (cheapest tier) with a TTL of
+    /// ~30 days, which is sufficient to cover the maximum governance proposal
+    /// voting window.
+    pub fn set_balance_snapshot(env: &Env, owner: &Address, ledger: u32, amount: i128) {
+        let key = TempKey::BalanceSnapshot(owner.clone(), ledger);
+        env.storage().temporary().set(&key, &amount);
+        env.storage()
+            .temporary()
+            .extend_ttl(&key, Self::SNAPSHOT_TTL_THRESHOLD, Self::SNAPSHOT_TTL_LEDGERS);
     }
 
     pub fn allowance(env: &Env, owner: &Address, spender: &Address) -> i128 {
@@ -202,6 +232,45 @@ impl TokenStorage {
         env.storage()
             .persistent()
             .remove(&PersistentKey::Delegation(owner.clone()));
+    }
+
+    pub fn delegators(env: &Env, delegate: &Address) -> soroban_sdk::Vec<Address> {
+        let key = PersistentKey::Delegators(delegate.clone());
+        if let Some(delegators) = env.storage().persistent().get(&key) {
+            Self::bump_persistent_ttl(env, &key);
+            delegators
+        } else {
+            soroban_sdk::Vec::new(env)
+        }
+    }
+
+    pub fn add_delegator(env: &Env, delegate: &Address, owner: &Address) {
+        let key = PersistentKey::Delegators(delegate.clone());
+        let mut delegators = Self::delegators(env, delegate);
+        if !delegators.contains(owner) {
+            delegators.push_back(owner.clone());
+        }
+        env.storage().persistent().set(&key, &delegators);
+        Self::bump_persistent_ttl(env, &key);
+    }
+
+    pub fn remove_delegator(env: &Env, delegate: &Address, owner: &Address) {
+        let key = PersistentKey::Delegators(delegate.clone());
+        let mut delegators = Self::delegators(env, delegate);
+        let mut index = 0;
+        while index < delegators.len() {
+            if delegators.get(index) == Some(owner.clone()) {
+                delegators.remove(index);
+                break;
+            }
+            index += 1;
+        }
+        if delegators.is_empty() {
+            env.storage().persistent().remove(&key);
+        } else {
+            env.storage().persistent().set(&key, &delegators);
+            Self::bump_persistent_ttl(env, &key);
+        }
     }
 
     /// Returns the total voting weight for `voter`: own balance + sum of all delegators' balances.

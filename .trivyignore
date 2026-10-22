@@ -1,0 +1,9 @@
+# .trivyignore
+# Suppress known false-positive or accepted-risk CVEs from Trivy scans.
+# Format: one CVE-ID or GHSA-ID per line, with an optional comment explaining the exception.
+#
+# Example:
+#   CVE-2023-12345  # false positive — not reachable in our build
+#
+# Keep this file lean. Every entry should be reviewed and re-evaluated each quarter.
+# Reference: https://aquasecurity.github.io/trivy/latest/docs/configuration/filtering/#trivyignore

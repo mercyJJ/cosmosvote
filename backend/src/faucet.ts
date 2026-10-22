@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { corsHeaders, isOriginAllowed } from './cors';
 import {
   Contract,
   Keypair,
@@ -152,23 +153,30 @@ export function createFaucetServer(
   store = new FaucetClaimStore(config.databasePath),
   mint: (config: FaucetConfig, recipient: string) => Promise<string> = mintTestTokens,
 ): Server {
-  const allowedOrigin = new URL(config.allowedOrigin).origin;
+  // Seed the runtime allowlist with the faucet's own origin so the single-origin
+  // FAUCET_ALLOWED_ORIGIN path still works alongside the ALLOWED_ORIGINS list.
+  const faucetOrigin = new URL(config.allowedOrigin).origin.toLowerCase();
+
+  function originAllowed(origin: string | undefined): origin is string {
+    if (!origin) return false;
+    const normalised = origin.toLowerCase().replace(/\/+$/, '');
+    return normalised === faucetOrigin || isOriginAllowed(origin);
+  }
 
   return createServer(async (request, response) => {
     const origin = request.headers.origin;
-    if (origin && origin !== allowedOrigin) {
+    if (origin && !originAllowed(origin)) {
       sendJson(response, 403, { error: 'Origin not allowed.' });
       return;
     }
-    if (origin) response.setHeader('Access-Control-Allow-Origin', allowedOrigin);
-    response.setHeader('Vary', 'Origin');
+    if (origin) {
+      corsHeaders(origin).forEach(([k, v]) => response.setHeader(k, v));
+    } else {
+      response.setHeader('Vary', 'Origin');
+    }
 
     if (request.method === 'OPTIONS') {
-      response.writeHead(204, {
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
-        'Access-Control-Max-Age': '600',
-      });
+      response.writeHead(204);
       response.end();
       return;
     }

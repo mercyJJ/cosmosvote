@@ -23,9 +23,12 @@
  *  • DiscordChannel – Discord Webhook        (subscriber.discordWebhookUrl)
  */
 
+import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import axios from 'axios';
 import type { GovernanceEvent, Subscriber } from './types';
+import { renderEmailNotification } from './emailTemplates';
+import { validateWebhookUrl, BlockedUrlError } from './ssrfGuard';
 
 // ── Plugin interface ──────────────────────────────────────────────────────────
 
@@ -70,6 +73,34 @@ function buildSubjectLine(event: GovernanceEvent): string {
     : `CosmosVote: proposal ${action}`;
 }
 
+/**
+ * Registration-time SSRF validation for every subscriber-supplied webhook URL.
+ * Throws a BlockedUrlError (403-mappable) when any URL is unsafe.
+ */
+export function validateChannelUrls(subscriber: Subscriber): void {
+  const urls: Array<string | undefined> = [
+    subscriber.webhookUrl,
+    subscriber.slackWebhookUrl,
+    subscriber.discordWebhookUrl,
+  ];
+  for (const url of urls) {
+    if (url) validateWebhookUrl(url);
+  }
+}
+
+/**
+ * Delivery-time SSRF validation. Re-resolves the hostname immediately before
+ * the request to defeat DNS rebinding. Throws a BlockedUrlError on failure.
+ */
+async function assertDeliverable(url: string): Promise<void> {
+  try {
+    await validateWebhookUrl(url);
+  } catch (err) {
+    if (err instanceof BlockedUrlError) throw err;
+    throw new BlockedUrlError(url, (err as Error)?.message ?? 'URL validation failed');
+  }
+}
+
 // ── Email channel ─────────────────────────────────────────────────────────────
 
 const transporter = nodemailer.createTransport({
@@ -90,14 +121,79 @@ export const EmailChannel: NotificationChannel = {
 
   async send(subscriber, event) {
     if (!subscriber.email) return;
+    const email = renderEmailNotification(event);
     await transporter.sendMail({
       from: process.env.EMAIL_FROM,
       to: subscriber.email,
       subject: buildSubjectLine(event),
-      text: buildTextMessage(event),
+      text: email.text,
+      html: email.html,
     });
   },
 };
+
+// ── Webhook request signing ───────────────────────────────────────────────────
+//
+// Every webhook delivery is signed with HMAC-SHA256 so subscribers can verify
+// that the request originated from CosmosVote and was not tampered with.
+//
+// Headers sent with each delivery:
+//   X-CosmosVote-Signature  – hex HMAC-SHA256 of `${timestamp}.${rawBody}`
+//   X-CosmosVote-Timestamp  – Unix timestamp (ms) used in the signature
+//
+// The shared secret is read from the WEBHOOK_SIGNING_SECRET env var. Rotate it
+// as part of the key rotation procedure; subscribers should accept both the
+// current and previous secret during a rotation window.
+//
+// Subscriber verification (Node.js example):
+//
+//   import crypto from 'crypto';
+//
+//   const timestamp = req.headers['x-cosmosvote-timestamp'];
+//   const signature = req.headers['x-cosmosvote-signature'];
+//   const rawBody   = req.rawBody.toString('utf8'); // exact bytes received
+//
+//   // Reject replayed requests older than 5 minutes
+//   if (Math.abs(Date.now() - Number(timestamp)) > 5 * 60 * 1000) {
+//     return res.status(401).send('stale timestamp');
+//   }
+//
+//   const expected = crypto
+//     .createHmac('sha256', process.env.WEBHOOK_SIGNING_SECRET)
+//     .update(`${timestamp}.${rawBody}`)
+//     .digest('hex');
+//
+//   const valid = crypto.timingSafeEqual(
+//     Buffer.from(expected, 'hex'),
+//     Buffer.from(signature, 'hex'),
+//   );
+//   if (!valid) return res.status(401).send('invalid signature');
+
+/** Returns the shared webhook signing secret, or throws if it is not configured. */
+export function getWebhookSigningSecret(): string {
+  const secret = process.env.WEBHOOK_SIGNING_SECRET;
+  if (!secret) {
+    throw new Error('WEBHOOK_SIGNING_SECRET is not configured');
+  }
+  return secret;
+}
+
+/**
+ * Computes the HMAC-SHA256 signature for a webhook delivery.
+ *
+ * The signed message is `${timestamp}.${body}` where `body` is the exact JSON
+ * string sent as the request body. Returns the signature as a lowercase hex string.
+ */
+export function computeWebhookSignature(
+  timestamp: string | number,
+  body: string,
+  secret: string,
+): string {
+  return crypto
+    .createHmac('sha256', secret)
+    .update(`${timestamp}.${body}`)
+    .digest('hex');
+}
 
 // ── Generic webhook channel ───────────────────────────────────────────────────
 
@@ -105,15 +201,33 @@ export const WebhookChannel: NotificationChannel = {
   name: 'webhook',
 
   isConfigured(subscriber) {
-    return !!subscriber.webhookUrl;
+    if (!subscriber.webhookUrl) return false;
+    validateWebhookUrl(subscriber.webhookUrl);
+    return true;
   },
 
   async send(subscriber, event) {
     if (!subscriber.webhookUrl) return;
+
+    const body = JSON.stringify({ event });
+    const timestamp = Date.now().toString();
+    const signature = computeWebhookSignature(
+      timestamp,
+      body,
+      getWebhookSigningSecret(),
+    );
+
     await axios.post(
       subscriber.webhookUrl,
-      { event },
-      { timeout: 10_000 },
+      body,
+      {
+        timeout: 10_000,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CosmosVote-Signature': signature,
+          'X-CosmosVote-Timestamp': timestamp,
+        },
+      },
     );
   },
 };
@@ -126,12 +240,16 @@ export const SlackChannel: NotificationChannel = {
   name: 'slack',
 
   isConfigured(subscriber) {
-    return !!(subscriber.slackWebhookUrl ?? process.env.SLACK_WEBHOOK_URL);
+    const url = subscriber.slackWebhookUrl ?? process.env.SLACK_WEBHOOK_URL;
+    if (!url) return false;
+    validateWebhookUrl(url);
+    return true;
   },
 
   async send(subscriber, event) {
     const url = subscriber.slackWebhookUrl ?? process.env.SLACK_WEBHOOK_URL;
     if (!url) return;
+    await assertDeliverable(url);
 
     const text = buildTextMessage(event);
     const emoji: Record<string, string> = {
@@ -170,12 +288,16 @@ export const DiscordChannel: NotificationChannel = {
   name: 'discord',
 
   isConfigured(subscriber) {
-    return !!(subscriber.discordWebhookUrl ?? process.env.DISCORD_WEBHOOK_URL);
+    const url = subscriber.discordWebhookUrl ?? process.env.DISCORD_WEBHOOK_URL;
+    if (!url) return false;
+    validateWebhookUrl(url);
+    return true;
   },
 
   async send(subscriber, event) {
     const url = subscriber.discordWebhookUrl ?? process.env.DISCORD_WEBHOOK_URL;
     if (!url) return;
+    await assertDeliverable(url);
 
     const text = buildTextMessage(event);
     await axios.post(

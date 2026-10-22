@@ -6,6 +6,13 @@
 import axios from 'axios';
 import { captureError } from './errorTracking';
 import { logger } from './logger';
+import { validateWebhookUrl } from './webhookUrlValidator';
+import {
+  notificationSentTotal,
+  notificationFailedTotal,
+  webhookLatencySeconds,
+  activeSubscriptions,
+} from './metrics';
 
 const MAX_POLL_FAILURES = 3;
 const MAX_WEBHOOK_RETRIES = 3;
@@ -40,7 +47,22 @@ export class NotificationService {
   private running = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(private readonly config: NotificationServiceConfig) {}
+  constructor(private readonly config: NotificationServiceConfig) {
+    activeSubscriptions.inc();
+    const validation = validateWebhookUrl(this.config.webhookUrl);
+    if (!validation.ok) {
+      logger.error(
+        {
+          event: 'webhook_url_blocked',
+          context: 'webhook-registration',
+          webhookUrl: this.config.webhookUrl,
+          reason: validation.reason,
+        },
+        'webhook URL rejected by SSRF guard'
+      );
+      throw new Error(`Blocked webhook URL: ${validation.reason}`);
+    }
+  }
 
   async checkReadiness(): Promise<boolean> {
     try {
@@ -99,16 +121,40 @@ export class NotificationService {
 
   async deliverWebhook(payload: WebhookPayload): Promise<void> {
     for (let attempt = 0; attempt <= MAX_WEBHOOK_RETRIES; attempt += 1) {
+      const validation = validateWebhookUrl(this.config.webhookUrl);
+      if (!validation.ok) {
+        logger.error(
+          {
+            event: 'webhook_url_blocked',
+            context: 'webhook-delivery',
+            webhookUrl: this.config.webhookUrl,
+            eventType: payload.event,
+            reason: validation.reason,
+          },
+          'webhook delivery skipped: URL rejected by SSRF guard'
+        );
+        notificationFailedTotal.inc({ contract_id: this.config.contractId });
+        return;
+      }
+
+      const end = webhookLatencySeconds.startTimer({ contract_id: this.config.contractId });
       try {
-        await axios.post(this.config.webhookUrl, payload, { timeout: 5_000 });
+        const response = await axios.post(this.config.webhookUrl, payload, {
+          timeout: 5_000,
+          maxRedirects: 0,
+        });
+        end({ status_code: String(response.status) });
+        notificationSentTotal.inc({ contract_id: this.config.contractId });
         return;
       } catch (err) {
         const statusCode = getHttpStatus(err);
+        end({ status_code: statusCode !== undefined ? String(statusCode) : 'error' });
         const status = statusCode === undefined ? 'unknown status' : `HTTP ${statusCode}`;
         const attemptNumber = attempt + 1;
         const message = getErrorMessage(err);
 
         if (attempt === MAX_WEBHOOK_RETRIES) {
+          notificationFailedTotal.inc({ contract_id: this.config.contractId });
           console.error(
             `[notification] Webhook delivery permanently failed after ${attemptNumber} attempts (${status}): ${message}`
           );
@@ -154,6 +200,7 @@ export class NotificationService {
   stop(): void {
     this.running = false;
     if (this.timer) clearTimeout(this.timer);
+    activeSubscriptions.dec();
     logger.info({ event: 'service_stop' }, 'notification service loop stopped');
   }
 }

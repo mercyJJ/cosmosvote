@@ -21,7 +21,7 @@
   "tags": ["cosmosvote", "governance", "stellar"],
   "timezone": "browser",
   "schemaVersion": 38,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
   "time": { "from": "now-1h", "to": "now" },
   "templating": {
@@ -175,6 +175,102 @@
         {
           "expr": "cosmosvote_event_poll_lag_seconds{network=\"$network\"}",
           "legendFormat": "lag"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Notifications Sent / Failed (rate/min)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "failed/min" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "rate(notification_sent_total{service=\"cosmosvote-notification\"}[1m]) * 60",
+          "legendFormat": "sent/min"
+        },
+        {
+          "expr": "rate(notification_failed_total{service=\"cosmosvote-notification\"}[1m]) * 60",
+          "legendFormat": "failed/min"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Webhook Latency p50 / p95 / p99 (seconds)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(webhook_latency_seconds_bucket{service=\"cosmosvote-notification\"}[5m]))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(webhook_latency_seconds_bucket{service=\"cosmosvote-notification\"}[5m]))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(webhook_latency_seconds_bucket{service=\"cosmosvote-notification\"}[5m]))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Active Subscriptions",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 10 },
+            { "color": "red", "value": 50 }
+          ]}
+        }
+      },
+      "targets": [
+        {
+          "expr": "active_subscriptions{service=\"cosmosvote-notification\"}",
+          "legendFormat": "subscriptions"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Notification Failure Rate",
+      "type": "gauge",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0, "max": 1,
+          "thresholds": { "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 0.01 },
+            { "color": "red", "value": 0.05 }
+          ]}
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(notification_failed_total{service=\"cosmosvote-notification\"}[5m]) / (rate(notification_sent_total{service=\"cosmosvote-notification\"}[5m]) + rate(notification_failed_total{service=\"cosmosvote-notification\"}[5m]))",
+          "legendFormat": "failure rate"
         }
       ]
     }

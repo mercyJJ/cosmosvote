@@ -1,6 +1,7 @@
 import type { Proposal, VoteRecord } from '../types';
 import { formatTokenAmount } from '../utils';
 import { DelegationPanel } from './DelegationPanel';
+import { NotificationPreferences } from './NotificationPreferences';
 
 interface Props {
   walletAddress: string;
@@ -10,6 +11,8 @@ interface Props {
   votedMap: Map<bigint, VoteRecord>;
   onCreateProposal: () => void;
   onDisconnect: () => void;
+  /** True while vote history is loading (e.g. fetching has_voted for all proposals). */
+  loadingVotes?: boolean;
 }
 
 const VOTE_ICON: Record<string, string> = { Yes: '✅', No: '❌', Abstain: '⬜' };
@@ -22,6 +25,7 @@ export function UserDashboard({
   votedMap,
   onCreateProposal,
   onDisconnect,
+  loadingVotes = false,
 }: Props) {
   const active = proposals.filter(p => p.state === 'Active');
   const voted = proposals.filter(p => votedMap.has(p.id));
@@ -157,6 +161,9 @@ export function UserDashboard({
 
       {/* Delegation management */}
       <DelegationPanel walletAddress={walletAddress} />
+
+      {/* Notification preferences */}
+      <NotificationPreferences walletAddress={walletAddress} />
     </aside>
   );
 }

@@ -88,4 +88,11 @@ impl TokenEvents {
             admin.clone(),
         );
     }
+
+    pub fn upgraded(env: &Env, new_wasm_hash: &BytesN<32>) {
+        env.events().publish(
+            (symbol_short!("token"), symbol_short!("upgraded")),
+            new_wasm_hash.clone(),
+        );
+    }
 }

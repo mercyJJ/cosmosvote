@@ -14,41 +14,85 @@ on:
       - 'frontend/**'
       - '.github/workflows/docker-image-scan.yml'
 
+permissions:
+  contents: read
+  security-events: write   # required to upload SARIF to GitHub Security tab
+
 jobs:
   scan-backend:
     name: Scan Backend Docker Image
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Build backend image
         run: docker build -t cosmosvote-backend:${{ github.sha }} .
 
-      - name: Run Trivy scan on backend image
+      - name: Run Trivy scan on backend image (table — fail on HIGH/CRITICAL)
         uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # 0.28.0
         with:
           image-ref: cosmosvote-backend:${{ github.sha }}
           format: table
           exit-code: '1'
           ignore-unfixed: true
-          severity: CRITICAL
+          vuln-type: 'os,library'
+          severity: 'HIGH,CRITICAL'
+          trivyignores: .trivyignore
+
+      - name: Run Trivy scan on backend image (SARIF — upload to Security tab)
+        if: always()   # upload even when the table step fails so the report is visible
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # 0.28.0
+        with:
+          image-ref: cosmosvote-backend:${{ github.sha }}
+          format: sarif
+          output: trivy-backend.sarif
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'HIGH,CRITICAL'
+          trivyignores: .trivyignore
+
+      - name: Upload SARIF report (backend)
+        if: always()
+        uses: github/codeql-action/upload-sarif@9e8d0789d4a0fa9ceb6b1738f7e269594bdd67f0 # v3
+        with:
+          sarif_file: trivy-backend.sarif
+          category: trivy-backend
 
   scan-frontend:
     name: Scan Frontend Docker Image
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Build frontend image
         run: docker build -t cosmosvote-frontend:${{ github.sha }} ./frontend
-        continue-on-error: true
 
-      - name: Run Trivy filesystem scan on frontend
+      - name: Run Trivy scan on frontend image (table — fail on HIGH/CRITICAL)
         uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # 0.28.0
         with:
-          scan-type: fs
-          scan-ref: ./frontend
+          image-ref: cosmosvote-frontend:${{ github.sha }}
           format: table
           exit-code: '1'
           ignore-unfixed: true
-          severity: CRITICAL
+          vuln-type: 'os,library'
+          severity: 'HIGH,CRITICAL'
+          trivyignores: .trivyignore
+
+      - name: Run Trivy scan on frontend image (SARIF — upload to Security tab)
+        if: always()
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # 0.28.0
+        with:
+          image-ref: cosmosvote-frontend:${{ github.sha }}
+          format: sarif
+          output: trivy-frontend.sarif
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'HIGH,CRITICAL'
+          trivyignores: .trivyignore
+
+      - name: Upload SARIF report (frontend)
+        if: always()
+        uses: github/codeql-action/upload-sarif@9e8d0789d4a0fa9ceb6b1738f7e269594bdd67f0 # v3
+        with:
+          sarif_file: trivy-frontend.sarif
+          category: trivy-frontend

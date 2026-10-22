@@ -10,7 +10,52 @@ process. Consequently, there is no `/openapi.json` or `/docs` endpoint to docume
 requires an HTTP API and its request/response contracts to be defined before an OpenAPI
 specification and Swagger UI can be generated.
 
+### Subscription Management API
+
+Issue #49's subscription list, update, and delete routes depend on that API foundation. The
+notification service currently has no HTTP router, and its subscription records are not associated
+with an authenticated caller. Its admin/viewer API keys identify shared roles, not individual
+subscribers. Before exposing these routes, define how subscriptions belong to callers and enforce
+that ownership for list, update, and delete; otherwise an authenticated caller could access another
+subscriber's channel details or change their preferences. The API contract and OpenAPI document
+should be added with that ownership model.
+
+## Security Headers and HTTPS
+
+All HTTP responses from the faucet API are passed through [`helmet`](https://helmetjs.github.io/), which sets the following headers:
+
+| Header | Value |
+|--------|-------|
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` |
+| `X-Frame-Options` | `DENY` |
+| `X-Content-Type-Options` | `nosniff` |
+| `Referrer-Policy` | `strict-origin` |
+
+### HTTPS-only enforcement
+
+The service itself does not terminate TLS. It must be deployed behind a TLS-terminating
+reverse proxy or load balancer (e.g. nginx, Caddy, or a cloud LB) that:
+
+- serves the API only over `https://` and redirects or rejects plain `http://` requests,
+- forwards the original scheme (e.g. `X-Forwarded-Proto: https`) so the app can detect HTTPS,
+- keeps TLS certificates valid and renewed.
+
+Because HSTS is sent with a one-year `max-age`, browsers that have seen the header will refuse
+plain-HTTP connections to the host for that period. Only enable HSTS on hosts that are
+permanently served over HTTPS; never expose the API directly over HTTP in production.
+
+### Verifying headers
+
+After deploying behind TLS, scan the public API URL with
+[securityheaders.com](https://securityheaders.com) (e.g. `https://api.example.com`). The scan
+should report a rating of **A or higher**. You can also check headers directly:
+
+```bash
+curl -sI https://api.example.com/api/faucet/claim | grep -Ei 'strict-transport|x-frame|x-content-type|referrer-policy'
+```
+
 ## Error Tracking
+=======
 
 Errors are captured via [Sentry](https://sentry.io). Set `SENTRY_DSN` in your environment to enable. Without it, errors are written to `stderr` only.
 

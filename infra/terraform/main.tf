@@ -225,11 +225,50 @@ resource "aws_s3_bucket_policy" "frontend" {
   })
 }
 
+# ─── CloudFront cache policies ────────────────────────────────────────────────
+
+# Immutable static assets (JS, CSS, fonts, images) — Vite content-addresses
+# these files via a hash in the filename, so they can be cached for 1 year.
+# Cache-Control: public, max-age=<var.immutable_assets_max_age>, immutable
+resource "aws_cloudfront_cache_policy" "immutable_assets" {
+  name        = "cosmosvote-immutable-assets-${var.environment}"
+  comment     = "1-year cache for content-addressed static assets (${var.environment})"
+  default_ttl = var.immutable_assets_max_age
+  max_ttl     = var.immutable_assets_max_age
+  min_ttl     = var.immutable_assets_max_age
+
+  parameters_in_cache_key_and_forwarded_to_origin {
+    cookies_config  { cookie_behavior  = "none" }
+    headers_config  { header_behavior  = "none" }
+    query_strings_config { query_string_behavior = "none" }
+    enable_accept_encoding_brotli = true
+    enable_accept_encoding_gzip   = true
+  }
+}
+
+# HTML entry-point — must never be served stale so new deployments take effect
+# immediately. Cache-Control: no-cache, no-store, must-revalidate
+resource "aws_cloudfront_cache_policy" "no_cache_html" {
+  name        = "cosmosvote-no-cache-html-${var.environment}"
+  comment     = "No-cache policy for index.html (${var.environment})"
+  default_ttl = 0
+  max_ttl     = 0
+  min_ttl     = 0
+
+  parameters_in_cache_key_and_forwarded_to_origin {
+    cookies_config  { cookie_behavior  = "none" }
+    headers_config  { header_behavior  = "none" }
+    query_strings_config { query_string_behavior = "none" }
+    enable_accept_encoding_brotli = true
+    enable_accept_encoding_gzip   = true
+  }
+}
+
 # ─── CloudFront distribution ──────────────────────────────────────────────────
 resource "aws_cloudfront_distribution" "frontend" {
   enabled             = true
   default_root_object = "index.html"
-  price_class         = "PriceClass_100"
+  price_class         = var.cdn_price_class
   comment             = "CosmosVote frontend (${var.environment})"
 
   origin {
@@ -238,18 +277,31 @@ resource "aws_cloudfront_distribution" "frontend" {
     origin_access_control_id = aws_cloudfront_origin_access_control.frontend.id
   }
 
+  # ── Ordered behaviour 1: content-addressed static assets ───────────────────
+  # Vite emits all hashed assets into /assets/. These files get a 1-year
+  # immutable cache and are Brotli/gzip compressed at the edge.
+  ordered_cache_behavior {
+    path_pattern           = "/assets/*"
+    target_origin_id       = local.origin_id
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = ["GET", "HEAD"]
+    cached_methods         = ["GET", "HEAD"]
+    compress               = true
+    cache_policy_id        = aws_cloudfront_cache_policy.immutable_assets.id
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.frontend_security.id
+  }
+
+  # ── Default behaviour: HTML shell + everything else ─────────────────────────
+  # index.html is always served fresh (TTL 0) so new deployments propagate
+  # instantly without requiring an explicit cache invalidation.
   default_cache_behavior {
     target_origin_id       = local.origin_id
     viewer_protocol_policy = "redirect-to-https"
     allowed_methods        = ["GET", "HEAD"]
     cached_methods         = ["GET", "HEAD"]
     compress               = true
+    cache_policy_id        = aws_cloudfront_cache_policy.no_cache_html.id
     response_headers_policy_id = aws_cloudfront_response_headers_policy.frontend_security.id
-
-    forwarded_values {
-      query_string = false
-      cookies { forward = "none" }
-    }
   }
 
   # SPA fallback: return index.html for 403/404

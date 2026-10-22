@@ -1,0 +1,117 @@
+/* DashboardSkeleton.module.css
+   Skeleton dimensions mirror the actual UserDashboard layout so the
+   transition from skeleton → content is smooth with no layout shift.
+*/
+
+.container {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+
+/* ── Wallet row ── */
+.walletRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 1rem;
+}
+
+.labelSkeleton {
+  height: 0.7rem;
+  width: 100px;
+  margin-bottom: 4px;
+}
+
+.addressSkeleton {
+  height: 0.85rem;
+  width: 140px;
+  margin-bottom: 6px;
+}
+
+.balanceSkeleton {
+  height: 1.1rem;
+  width: 80px;
+}
+
+.buttonGroup {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.buttonSkeleton {
+  height: 2rem;
+  width: 90px;
+  border-radius: 6px;
+}
+
+/* ── Stats row ── */
+.statsRow {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.statCard {
+  flex: 1 1 100px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.statValueSkeleton {
+  height: 1.25rem;
+  width: 2rem;
+}
+
+.statLabelSkeleton {
+  height: 0.7rem;
+  width: 80px;
+}
+
+/* ── Vote history ── */
+.historyLabel {
+  margin-bottom: 0.4rem;
+}
+
+.sectionTitleSkeleton {
+  height: 0.75rem;
+  width: 70px;
+  margin-bottom: 0.4rem;
+}
+
+.historyRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.3rem;
+}
+
+.historyTitleSkeleton {
+  height: 0.8rem;
+  width: 60%;
+}
+
+.historyVoteSkeleton {
+  height: 0.8rem;
+  width: 50px;
+}
+
+/* ── Mobile ── */
+@media (max-width: 480px) {
+  .buttonSkeleton {
+    width: 70px;
+  }
+
+  .historyTitleSkeleton {
+    width: 50%;
+  }
+}

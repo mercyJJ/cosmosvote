@@ -1,41 +1,80 @@
 version: 2
+# Dependabot configuration for CosmosVote.
+#
+# Three ecosystems are kept up to date on a weekly cadence:
+#   - cargo         → Rust contracts (workspace root)
+#   - npm           → frontend + backend Node services
+#   - github-actions → reusable workflow actions
+#
+# Minor and patch updates are grouped per ecosystem so a single pull
+# request batches low-risk dependency bumps. Major updates remain
+# individual PRs so they can be reviewed in isolation. Patch-only PRs
+# are opted in to auto-merge where the repository allows it.
 updates:
-  - package-ecosystem: "cargo"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-  - package-ecosystem: "npm"
-    directory: "/frontend"
-    schedule:
-      interval: "weekly"
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-version: 2
-updates:
+  # ── Rust / Cargo ──────────────────────────────────────────────────────
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
+      day: monday
     open-pull-requests-limit: 5
     labels:
       - dependencies
       - rust
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - minor
+          - patch
+    # Auto-merge is only honoured when repository settings permit it.
+    auto-merge: true
 
+  # ── npm (frontend) ────────────────────────────────────────────────────
   - package-ecosystem: npm
     directory: /frontend
     schedule:
       interval: weekly
+      day: monday
     open-pull-requests-limit: 5
     labels:
       - dependencies
       - javascript
+    groups:
+      npm-frontend-minor-patch:
+        update-types:
+          - minor
+          - patch
+    auto-merge: true
 
+  # ── npm (backend) ────────────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - javascript
+    groups:
+      npm-backend-minor-patch:
+        update-types:
+          - minor
+          - patch
+    auto-merge: true
+
+  # ── GitHub Actions ────────────────────────────────────────────────────
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+      day: monday
     labels:
       - dependencies
       - ci
+    groups:
+      actions-minor-patch:
+        update-types:
+          - minor
+          - patch
+    auto-merge: true

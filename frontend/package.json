@@ -12,6 +12,7 @@
     "lint": "eslint src --ext .ts,.tsx --report-unused-disable-directives --max-warnings 0",
     "type-check": "tsc --noEmit",
     "bundle-analyze": "vite build --mode analyze",
+    "check:sri": "node scripts/check-sri.mjs",
     "license-check": "license-checker --onlyAllow 'MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;CC0-1.0;Unlicense;0BSD;Python-2.0' --excludePrivatePackages"
   },
   "dependencies": {
@@ -26,8 +27,8 @@
     "@testing-library/react": "16.3.2",
     "@testing-library/user-event": "14.6.7",
     "@types/react": "19.2.17",
-    "@types/react-dom": "19.3.0",
-    "@typescript-eslint/eslint-plugin": "8.61.0",
+    "@types/react-dom": "19.2.3",
+    "@typescript-eslint/eslint-plugin": "8.71.2",
     "@typescript-eslint/parser": "8.61.0",
     "@vitejs/plugin-react": "4.3.4",
     "@vitest/coverage-v8": "4.1.9",

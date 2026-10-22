@@ -218,8 +218,9 @@ impl GovernanceStorage {
             .persistent()
             .get(&key)
             .unwrap_or(false);
-        // bump TTL on read
-        Self::bump_persistent_ttl(env, &key);
+        if env.storage().persistent().has(&key) {
+            Self::bump_persistent_ttl(env, &key);
+        }
         v
     }
     pub fn set_has_voted(env: &Env, proposal_id: u64, voter: &Address, v: bool) {
@@ -252,6 +253,20 @@ impl GovernanceStorage {
     }
     pub fn set_last_proposal_time(env: &Env, proposer: &Address, v: u64) {
         let key = PersistentKey::LastProposal(proposer.clone());
+        env.storage().persistent().set(&key, &v);
+        Self::bump_persistent_ttl(env, &key);
+    }
+
+    // --- Choice votes (multi-choice proposals) ---
+
+    pub fn choice_votes(env: &Env, proposal_id: u64, choice_index: u32) -> i128 {
+        let key = PersistentKey::ChoiceVotes(proposal_id, choice_index);
+        let v = env.storage().persistent().get(&key).unwrap_or(0);
+        Self::bump_persistent_ttl(env, &key);
+        v
+    }
+    pub fn set_choice_votes(env: &Env, proposal_id: u64, choice_index: u32, v: i128) {
+        let key = PersistentKey::ChoiceVotes(proposal_id, choice_index);
         env.storage().persistent().set(&key, &v);
         Self::bump_persistent_ttl(env, &key);
     }

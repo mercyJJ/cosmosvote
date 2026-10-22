@@ -35,3 +35,76 @@ Recommendations
   for branch-scoped overrides and feature flags.
 - Never commit private keys or credentials in branch env files. Use CI secrets
   for protected values and provide `.env.example` documenting required keys.
+
+---
+
+## Branch Protection Rules (GitHub)
+
+The `main` branch is the canonical integration branch and must be protected so
+that no change lands without review and passing CI. The
+`.github/workflows/branch-protection.yml` workflow programmatically enforces
+the settings below — it runs on a daily schedule and on `workflow_dispatch`
+and fails the check if any requirement is missing.
+
+> Reading branch protection rules requires repository **admin** privileges.
+> Provide an admin-scoped PAT via the `BRANCH_PROTECTION_TOKEN` repository
+> secret so the workflow can validate the configuration. When the secret is
+> absent the workflow falls back to the default `GITHUB_TOKEN`.
+
+### Required settings on `main`
+
+| Setting | Required value |
+| --- | --- |
+| Require a pull request before merging | ✅ Enabled |
+| Required approving reviews | **≥ 1** |
+| Require status checks to pass before merging | ✅ Enabled |
+| Require branches to be up to date before merging | ✅ Enabled |
+
+### Required status checks
+
+These CI contexts (job `name`s from `.github/workflows/ci.yml` and
+`matrix.yml`) must be present in the "Require status checks to pass before
+merging" list:
+
+- `Formatting`
+- `Clippy`
+- `Tests`
+- `Build WASM`
+- `License Compliance`
+- `actionlint`
+- `Frontend Coverage`
+- `Frontend (Node 20)` *(matrix.yml)*
+- `Contracts (Rust stable)` *(matrix.yml)*
+
+### How to configure (repository admin)
+
+Using the `gh` CLI:
+
+```bash
+gh api -X PUT repos/:owner/:repo/branches/main/protection \
+  -f required_pull_request_reviews_required_approving_review_count=1 \
+  -f required_status_checks_strict=true \
+  -f required_status_checks_contexts=Formatting \
+  -f required_status_checks_contexts=Clippy \
+  -f required_status_checks_contexts=Tests \
+  -f required_status_checks_contexts="Build WASM" \
+  -f required_status_checks_contexts="License Compliance" \
+  -f required_status_checks_contexts=actionlint \
+  -f required_status_checks_contexts="Frontend Coverage" \
+  -f required_status_checks_contexts="Frontend (Node 20)" \
+  -f required_status_checks_contexts="Contracts (Rust stable)" \
+  -f enforce_admins=true \
+  -f restrictions=
+```
+
+Or configure via **Settings → Branches → Branch protection rules** in the
+GitHub web UI, adding `main` and ticking the boxes above.
+
+### Verification
+
+Run the workflow manually (the "Run workflow" button on the
+`Enforce Branch Protection` workflow) or wait for the daily schedule. The job
+prints a summary of the enforced checks and fails if any required context or
+reviewer is missing. See
+[docs/branch-config.md](../docs/branch-config.md) for the canonical list of
+required settings.
