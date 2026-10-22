@@ -18,6 +18,15 @@ path = "../../tests/delegation_vote_weight_tests.rs"
 name = "governance_treasury_cross_contract_tests"
 path = "../../tests/governance_treasury_cross_contract_tests.rs"
 
+# Issue #114: this file previously existed but was never registered as a
+# cargo test target, so it silently never ran in CI despite looking like
+# normal test coverage. Registering it here is what makes `make
+# test-integration` (and the new event-type / retry tests added for #114)
+# actually execute.
+[[test]]
+name = "notification_integration_tests"
+path = "../../tests/notification_integration_tests.rs"
+
 [dependencies]
 soroban-sdk = { version = "26.1.0" }
 
