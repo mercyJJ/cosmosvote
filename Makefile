@@ -44,6 +44,15 @@ fmt-check:
 lint:
 	cargo clippy --all-targets --all-features -- -D warnings
 
+## Run instruction-count benchmarks against the committed baseline (fails on >10% regression)
+bench:
+	cargo test -p cosmosvote-governance bench_ --features testutils -- --nocapture
+
+## Intentionally update tests/baselines/perf_contract_execution.json to the current instruction counts.
+## Review the resulting diff carefully before committing it.
+bench-update:
+	BENCH_UPDATE=1 cargo test -p cosmosvote-governance bench_ --features testutils -- --nocapture --test-threads=1
+
 ## Check compilation without building
 check:
 	cargo check --all-targets

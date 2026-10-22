@@ -1,3 +1,6 @@
 {
-  "elapsed_ms": 5
+  "elapsed_ms": 5,
+  "create_proposal": 5000000,
+  "cast_vote": 2000000,
+  "finalise": 3000000
 }

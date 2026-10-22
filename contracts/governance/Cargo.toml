@@ -35,6 +35,8 @@ soroban-sdk = { version = "26.1.0", features = ["testutils"] }
 proptest = "1.6.0"
 cosmosvote-token = { path = "../token", features = ["testutils"] }
 cosmosvote-treasury = { path = "../treasury", features = ["testutils"] }
+# Issue #113: reads/writes tests/baselines/perf_contract_execution.json
+serde_json = "1.0"
 
 [features]
 testutils = ["soroban-sdk/testutils"]
