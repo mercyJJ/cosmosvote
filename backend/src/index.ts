@@ -11,6 +11,9 @@ const env = loadEnv();
 // Must be called before any async work so unhandled rejections are captured.
 initErrorTracking();
 
+// Initialize the append-only audit log for admin operations.
+auditLogger.init({ logPath: env.AUDIT_LOG_PATH });
+
 const service = new NotificationService({
   rpcUrl: env.STELLAR_RPC_URL,
   contractId: env.GOVERNANCE_CONTRACT_ID,
@@ -43,6 +46,7 @@ async function shutdown() {
   logger.info({ event: 'shutdown' }, 'notification service stopping');
   service.stop();
   healthServer.close();
+  await auditLogger.flush();
   await flushErrorTracking();
   process.exit(0);
 }
