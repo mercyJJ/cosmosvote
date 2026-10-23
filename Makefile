@@ -30,6 +30,7 @@ test-prop:
 ## Run integration tests only
 test-integration:
 	cargo test -p cosmosvote-governance --test delegation_vote_weight_tests --features testutils
+	cargo test -p cosmosvote-governance --test notification_integration_tests
 
 ## Format code
 fmt:
@@ -42,6 +43,15 @@ fmt-check:
 ## Run Clippy linter
 lint:
 	cargo clippy --all-targets --all-features -- -D warnings
+
+## Run instruction-count benchmarks against the committed baseline (fails on >10% regression)
+bench:
+	cargo test -p cosmosvote-governance bench_ --features testutils -- --nocapture
+
+## Intentionally update tests/baselines/perf_contract_execution.json to the current instruction counts.
+## Review the resulting diff carefully before committing it.
+bench-update:
+	BENCH_UPDATE=1 cargo test -p cosmosvote-governance bench_ --features testutils -- --nocapture --test-threads=1
 
 ## Check compilation without building
 check:

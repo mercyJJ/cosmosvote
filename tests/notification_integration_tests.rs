@@ -45,6 +45,13 @@ pub enum EventKind {
     ProposalCreated { proposal_id: u64 },
     VoteCast { proposal_id: u64, voter: String },
     ProposalFinalised { proposal_id: u64, passed: bool },
+    /// Issue #114 — emitted once an already-passed proposal's payload runs on-chain.
+    ProposalExecuted { proposal_id: u64 },
+    /// Issue #114 — emitted when a proposal is cancelled before it finalises.
+    ProposalCancelled { proposal_id: u64 },
+    /// Issue #114 — emitted when contract admin rights move to a new address.
+    /// This always triggers an admin alert email regardless of subscription filters.
+    AdminTransfer { old_admin: String, new_admin: String },
 }
 
 /// Outbound notification produced by the router.
@@ -125,6 +132,10 @@ pub struct MockHttpClient {
     pub requests: RefCell<Vec<(String, String)>>, // (url, payload)
     /// HTTP status code to return (200 = success, 500 = server error).
     pub status: RefCell<u16>,
+    /// Issue #114 — number of *additional* calls after the first that should
+    /// still fail with a 5xx before the mock starts succeeding. Lets tests
+    /// simulate a transient outage that recovers after N retries.
+    pub fail_count: RefCell<u32>,
 }
 
 impl MockHttpClient {
@@ -132,11 +143,20 @@ impl MockHttpClient {
         Self {
             requests: RefCell::new(vec![]),
             status: RefCell::new(200),
+            fail_count: RefCell::new(0),
         }
     }
 
     pub fn post(&self, url: &str, payload: &str) -> Result<u16, String> {
         self.requests.borrow_mut().push((url.into(), payload.into()));
+
+        let mut fail_count = self.fail_count.borrow_mut();
+        if *fail_count > 0 {
+            *fail_count -= 1;
+            return Err("HTTP 503".into());
+        }
+        drop(fail_count);
+
         let s = *self.status.borrow();
         if s >= 500 {
             Err(format!("HTTP {s}"))
@@ -190,25 +210,64 @@ impl<'a> NotificationRouter<'a> {
         errors
     }
 
+    /// Issue #114 — webhook delivery retries up to `MAX_WEBHOOK_RETRIES`
+    /// times on failure before the error is surfaced to the caller. Retries
+    /// are immediate (no backoff) since the mock transport has no real
+    /// latency; a production HTTP client would add backoff between tries.
+    const MAX_WEBHOOK_RETRIES: u32 = 3;
+
+    fn post_webhook_with_retry(&self, payload: &str) -> Result<(), String> {
+        let mut last_err = String::new();
+        for _attempt in 0..Self::MAX_WEBHOOK_RETRIES {
+            match self.http.post(&self.webhook_url, payload) {
+                Ok(_) => return Ok(()),
+                Err(e) => last_err = e,
+            }
+        }
+        Err(last_err)
+    }
+
     fn dispatch(&self, event: ContractEvent) -> Result<(), String> {
         match &event.kind {
             EventKind::ProposalCreated { proposal_id } => {
                 let payload = format!(
                     r#"{{"event":"proposal_created","proposal_id":{proposal_id}}}"#
                 );
-                self.http.post(&self.webhook_url, &payload)?;
+                self.post_webhook_with_retry(&payload)?;
             }
             EventKind::VoteCast { proposal_id, voter } => {
                 let payload = format!(
                     r#"{{"event":"vote_cast","proposal_id":{proposal_id},"voter":"{voter}"}}"#
                 );
-                self.http.post(&self.webhook_url, &payload)?;
+                self.post_webhook_with_retry(&payload)?;
             }
             EventKind::ProposalFinalised { proposal_id, passed } => {
                 let subject = format!("Proposal #{proposal_id} finalised");
                 let body = format!(
                     "Proposal #{proposal_id} has been {}.",
                     if *passed { "passed" } else { "rejected" }
+                );
+                self.smtp.send(&self.email_to, &subject, &body)?;
+            }
+            EventKind::ProposalExecuted { proposal_id } => {
+                let payload = format!(
+                    r#"{{"event":"proposal_executed","proposal_id":{proposal_id}}}"#
+                );
+                self.post_webhook_with_retry(&payload)?;
+            }
+            EventKind::ProposalCancelled { proposal_id } => {
+                let payload = format!(
+                    r#"{{"event":"proposal_cancelled","proposal_id":{proposal_id}}}"#
+                );
+                self.post_webhook_with_retry(&payload)?;
+            }
+            EventKind::AdminTransfer { old_admin, new_admin } => {
+                // Always alert — admin transfers are security-sensitive and
+                // must not be filtered out like ordinary subscriptions.
+                let subject = "SECURITY ALERT: Governance admin transferred".to_string();
+                let body = format!(
+                    "Contract admin was transferred from {old_admin} to {new_admin}. \
+                     If this was not expected, investigate immediately."
                 );
                 self.smtp.send(&self.email_to, &subject, &body)?;
             }
@@ -429,4 +488,106 @@ fn test_empty_polling_round_is_no_op() {
     assert!(errors.is_empty());
     assert!(http.requests.borrow().is_empty());
     assert!(smtp.sent.borrow().is_empty());
+}
+
+// --- Issue #114: remaining core event types ---
+
+#[test]
+fn test_proposal_executed_triggers_webhook() {
+    let rpc = MockRpcClient::new(vec![vec![
+        make_event("evt-9", EventKind::ProposalExecuted { proposal_id: 55 }),
+    ]]);
+    let http = MockHttpClient::new();
+    let smtp = MockSmtpClient::new();
+    let router = NotificationRouter::new("https://hooks.example.com/gov", "admin@example.com", &http, &smtp);
+    let poller = EventPoller::new(&rpc, &router);
+
+    let errors = poller.poll_once().expect("poll should succeed");
+    assert!(errors.is_empty());
+    assert_eq!(http.requests.borrow().len(), 1);
+    let (_, payload) = &http.requests.borrow()[0];
+    assert!(payload.contains("\"proposal_executed\""));
+    assert!(payload.contains("55"));
+}
+
+#[test]
+fn test_proposal_cancelled_triggers_webhook() {
+    let rpc = MockRpcClient::new(vec![vec![
+        make_event("evt-10", EventKind::ProposalCancelled { proposal_id: 23 }),
+    ]]);
+    let http = MockHttpClient::new();
+    let smtp = MockSmtpClient::new();
+    let router = NotificationRouter::new("https://hooks.example.com/gov", "admin@example.com", &http, &smtp);
+    let poller = EventPoller::new(&rpc, &router);
+
+    let errors = poller.poll_once().expect("poll should succeed");
+    assert!(errors.is_empty());
+    assert_eq!(http.requests.borrow().len(), 1);
+    let (_, payload) = &http.requests.borrow()[0];
+    assert!(payload.contains("\"proposal_cancelled\""));
+    assert!(payload.contains("23"));
+}
+
+#[test]
+fn test_admin_transfer_sends_admin_alert_email() {
+    let rpc = MockRpcClient::new(vec![vec![
+        make_event(
+            "evt-11",
+            EventKind::AdminTransfer {
+                old_admin: "GOLDADMIN".into(),
+                new_admin: "GNEWADMIN".into(),
+            },
+        ),
+    ]]);
+    let http = MockHttpClient::new();
+    let smtp = MockSmtpClient::new();
+    let router = NotificationRouter::new("https://hooks.example.com/gov", "admin@example.com", &http, &smtp);
+    let poller = EventPoller::new(&rpc, &router);
+
+    let errors = poller.poll_once().expect("poll should succeed");
+    assert!(errors.is_empty());
+    assert!(http.requests.borrow().is_empty(), "admin transfer should not go through webhook");
+    assert_eq!(smtp.sent.borrow().len(), 1);
+    let (to, subject, body) = &smtp.sent.borrow()[0];
+    assert_eq!(to, "admin@example.com");
+    assert!(subject.to_lowercase().contains("alert"));
+    assert!(body.contains("GOLDADMIN"));
+    assert!(body.contains("GNEWADMIN"));
+}
+
+// --- Issue #114: webhook retry behavior ---
+
+#[test]
+fn test_webhook_retries_and_recovers_from_transient_failure() {
+    let rpc = MockRpcClient::new(vec![vec![
+        make_event("evt-12", EventKind::ProposalCreated { proposal_id: 77 }),
+    ]]);
+    let http = MockHttpClient::new();
+    // Fail the first 2 attempts, succeed on the 3rd (within the retry budget).
+    *http.fail_count.borrow_mut() = 2;
+    let smtp = MockSmtpClient::new();
+    let router = NotificationRouter::new("https://hooks.example.com/gov", "admin@example.com", &http, &smtp);
+    let poller = EventPoller::new(&rpc, &router);
+
+    let errors = poller.poll_once().expect("poll should succeed");
+    assert!(errors.is_empty(), "delivery should succeed after retries: {errors:?}");
+    // 2 failed attempts + 1 successful attempt = 3 total HTTP calls recorded.
+    assert_eq!(http.requests.borrow().len(), 3);
+}
+
+#[test]
+fn test_webhook_retry_gives_up_after_max_attempts() {
+    let rpc = MockRpcClient::new(vec![vec![
+        make_event("evt-13", EventKind::ProposalCreated { proposal_id: 88 }),
+    ]]);
+    let http = MockHttpClient::new();
+    // Exceeds the retry budget — every attempt fails.
+    *http.fail_count.borrow_mut() = 10;
+    let smtp = MockSmtpClient::new();
+    let router = NotificationRouter::new("https://hooks.example.com/gov", "admin@example.com", &http, &smtp);
+    let poller = EventPoller::new(&rpc, &router);
+
+    let errors = poller.poll_once().expect("poll_once itself should not error");
+    assert_eq!(errors.len(), 1, "should surface exactly one dispatch error after exhausting retries");
+    assert!(errors[0].contains("503"));
 }

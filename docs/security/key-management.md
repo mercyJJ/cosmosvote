@@ -88,3 +88,69 @@ Popular choices: AWS CloudHSM, Google Cloud HSM, YubiHSM 2, Ledger hardware wall
 - Use separate keys for testnet and mainnet.
 - Use a dedicated deployer key with no token balance beyond what is needed for gas.
 - Rotate keys after any suspected compromise or team member offboarding.
+
+---
+
+## Notification service API key rotation (Issue #119)
+
+The notification service (`notification-service/`) authenticates its admin
+API with bearer tokens (`ADMIN_API_KEY` / `VIEWER_API_KEY`). Those static
+env-var keys have no revocation path: a compromised key stays valid for the
+life of the deployment. `notification-service/src/keyStore.ts` adds a
+rotating key store on top of that to close this gap.
+
+### How it works
+
+- Keys are stored as salted SHA-256 hashes in a JSON file
+  (`API_KEY_STORE_PATH`, default `notification-service/data/api-keys.json`),
+  never in plaintext. The raw key is only ever shown once, at creation time,
+  on the CLI.
+- `auth.ts` checks the key store first on every request. A key found in the
+  store but marked revoked is rejected immediately with `401 Unauthorized`,
+  even though the request otherwise looks well-formed.
+- The static `ADMIN_API_KEY` / `VIEWER_API_KEY` env vars still work as a
+  fallback for deployments that have not migrated to the key store, so this
+  is backward compatible.
+
+### Rotating a key
+
+```bash
+cd notification-service
+
+# Generate a new admin key and revoke the previously active admin key
+npm run keys:rotate -- admin
+# -> prints the new key id and raw value (store it in your secrets manager now)
+
+# Same for the viewer role
+npm run keys:rotate -- viewer
+
+# List all keys (ids + timestamps, never the raw value)
+npm run keys:list
+
+# Revoke a specific key immediately (e.g. on suspected compromise)
+npm run keys:revoke -- <keyId>
+```
+
+After rotating, update the secret in your secrets manager (see Options 1–3
+above) and redeploy the notification service so it picks up the new value
+wherever it is injected as `Authorization: Bearer <key>`.
+
+### Stale key alert
+
+`npm run keys:check-stale` (default threshold: 90 days) lists any active key
+that has not been rotated recently and exits with a non-zero status code
+when it finds one, so it can be wired into a CI cron job or uptime/alerting
+system to catch keys that nobody remembered to rotate:
+
+```bash
+npm run keys:check-stale -- 90
+```
+
+### Recommended rotation cadence
+
+- Rotate admin/viewer keys at least every 90 days.
+- Rotate immediately on suspected compromise or when a team member with
+  access to the key leaves.
+- Revoke the old key only after the new key has been confirmed working in
+  production (the `rotate` command does this atomically: it revokes the old
+  key for that role in the same operation as issuing the new one).
