@@ -28,10 +28,10 @@ name = "notification_integration_tests"
 path = "../../tests/notification_integration_tests.rs"
 
 [dependencies]
-soroban-sdk = { version = "26.1.0" }
+soroban-sdk = { version = "29.0.1" }
 
 [dev-dependencies]
-soroban-sdk = { version = "26.1.0", features = ["testutils"] }
+soroban-sdk = { version = "29.0.1", features = ["testutils"] }
 proptest = "1.6.0"
 cosmosvote-token = { path = "../token", features = ["testutils"] }
 cosmosvote-treasury = { path = "../treasury", features = ["testutils"] }
