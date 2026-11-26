@@ -5,11 +5,23 @@
 #   ./rollback.sh                        # list available backups
 #   ./rollback.sh <backup_file>          # restore from specific backup
 #   ./rollback.sh --latest               # restore from most recent backup
+#   ./rollback.sh --latest --non-interactive  # CI mode (see below)
+#
+# Flags:
+#   --latest            Restore from the most recent backup file.
+#   --non-interactive   CI mode: never prompt, never skip verification
+#                       silently, and emit machine-readable status lines.
+#                       Exit codes are stable for workflow detection:
+#                         0 = rollback succeeded (and verified if possible)
+#                         1 = rollback failed (bad backup, restore, or verify)
+#                         2 = rollback applied but could not be verified
+#                             (e.g. STELLAR_SECRET_KEY missing)
 #
 # What this script does:
 #   1. Reads TOKEN_CONTRACT_ID and GOVERNANCE_CONTRACT_ID from the backup file.
 #   2. Updates .env (or prints export commands if .env is absent).
 #   3. Verifies the restored contracts still respond on-chain.
+=======
 #
 # NOTE: Soroban contract deployments are irreversible on-chain. This script
 # restores the *references* (contract IDs) in your environment so your
@@ -41,6 +53,16 @@ fi
 STELLAR_SECRET_KEY="${STELLAR_SECRET_KEY:-}"
 NETWORK="${NETWORK:-local}"
 
+# ─── CI / non-interactive mode ───────────────────────────────────────────────
+# Set via --non-interactive flag or ROLLBACK_NON_INTERACTIVE=1 env var.
+NON_INTERACTIVE="${ROLLBACK_NON_INTERACTIVE:-0}"
+
+# Emit a stable, greppable status line for CI log parsing.
+status() {
+  local state="$1"; shift
+  echo "ROLLBACK_STATUS=${state} $*"
+}
+
 # ─── List backups helper ─────────────────────────────────────────────────────
 list_backups() {
   if [[ ! -d "$BACKUP_DIR" ]] || [[ -z "$(ls -A "$BACKUP_DIR" 2>/dev/null)" ]]; then
@@ -54,7 +76,15 @@ list_backups() {
 }
 
 # ─── Argument handling ───────────────────────────────────────────────────────
-ARG="${1:-}"
+ARG=""
+for arg in "$@"; do
+  case "$arg" in
+    --non-interactive) NON_INTERACTIVE=1 ;;
+    --latest)          ARG="--latest" ;;
+    -*)                log ERROR "Unknown flag: $arg"; exit 1 ;;
+    *)                 ARG="$arg" ;;
+  esac
+done
 
 if [[ -z "$ARG" ]]; then
   list_backups
@@ -63,13 +93,14 @@ fi
 
 if [[ "$ARG" == "--latest" ]]; then
   BACKUP_FILE=$(ls -1t "$BACKUP_DIR"/*.env 2>/dev/null | head -1) \
-    || { log ERROR "No backup files found in $BACKUP_DIR"; exit 1; }
+    || { log ERROR "No backup files found in $BACKUP_DIR"; status FAILED reason=no_backups; exit 1; }
   log INFO "Using latest backup: $BACKUP_FILE"
 else
   BACKUP_FILE="$ARG"
 fi
 
-[[ -f "$BACKUP_FILE" ]] || { log ERROR "Backup file not found: $BACKUP_FILE"; exit 1; }
+[[ -f "$BACKUP_FILE" ]] || { log ERROR "Backup file not found: $BACKUP_FILE"; status FAILED reason=backup_not_found; exit 1; }
+log INFO "Non-interactive mode: $NON_INTERACTIVE"
 
 # ─── Parse backup ────────────────────────────────────────────────────────────
 log INFO "Reading backup: $BACKUP_FILE"
@@ -78,8 +109,8 @@ cat "$BACKUP_FILE"
 # shellcheck disable=SC1090
 source "$BACKUP_FILE"
 
-[[ -n "${TOKEN_CONTRACT_ID:-}" ]]      || { log ERROR "TOKEN_CONTRACT_ID missing in backup"; exit 1; }
-[[ -n "${GOVERNANCE_CONTRACT_ID:-}" ]] || { log ERROR "GOVERNANCE_CONTRACT_ID missing in backup"; exit 1; }
+[[ -n "${TOKEN_CONTRACT_ID:-}" ]]      || { log ERROR "TOKEN_CONTRACT_ID missing in backup"; status FAILED reason=missing_token_id; exit 1; }
+[[ -n "${GOVERNANCE_CONTRACT_ID:-}" ]] || { log ERROR "GOVERNANCE_CONTRACT_ID missing in backup"; status FAILED reason=missing_governance_id; exit 1; }
 
 log INFO "Restoring:"
 log INFO "  TOKEN_CONTRACT_ID=$TOKEN_CONTRACT_ID"
@@ -107,7 +138,14 @@ fi
 # ─── Verify restored contracts ───────────────────────────────────────────────
 if [[ -z "$STELLAR_SECRET_KEY" ]]; then
   log WARN "STELLAR_SECRET_KEY not set; skipping on-chain verification."
+  if [[ "$NON_INTERACTIVE" == "1" ]]; then
+    # In CI we must not report success without verification; signal distinctly.
+    log ERROR "Non-interactive mode requires STELLAR_SECRET_KEY for verification."
+    status UNVERIFIED reason=missing_secret_key
+    exit 2
+  fi
   log INFO "Rollback complete (unverified). Set STELLAR_SECRET_KEY and re-run to verify."
+  status UNVERIFIED reason=missing_secret_key
   exit 0
 fi
 
@@ -126,6 +164,12 @@ case "$NETWORK" in
     ;;
   *)
     log WARN "Unknown network '$NETWORK'; skipping on-chain verification."
+    if [[ "$NON_INTERACTIVE" == "1" ]]; then
+      log ERROR "Non-interactive mode requires a known NETWORK (local|testnet|mainnet)."
+      status UNVERIFIED reason=unknown_network
+      exit 2
+    fi
+    status UNVERIFIED reason=unknown_network
     exit 0
     ;;
 esac
@@ -137,7 +181,7 @@ stellar contract invoke \
   --rpc-url "$RPC_URL" \
   --network-passphrase "$PASSPHRASE" \
   -- total_supply >/dev/null \
-  || { log ERROR "Token contract ($TOKEN_CONTRACT_ID) did not respond. Verify the contract ID is correct for network '$NETWORK'."; exit 1; }
+  || { log ERROR "Token contract ($TOKEN_CONTRACT_ID) did not respond. Verify the contract ID is correct for network '$NETWORK'."; status FAILED reason=token_verify_failed; exit 1; }
 
 log INFO "Verifying governance contract ($GOVERNANCE_CONTRACT_ID)..."
 stellar contract invoke \
@@ -146,7 +190,9 @@ stellar contract invoke \
   --rpc-url "$RPC_URL" \
   --network-passphrase "$PASSPHRASE" \
   -- get_proposal_count >/dev/null \
-  || { log ERROR "Governance contract ($GOVERNANCE_CONTRACT_ID) did not respond. Verify the contract ID is correct for network '$NETWORK'."; exit 1; }
+  || { log ERROR "Governance contract ($GOVERNANCE_CONTRACT_ID) did not respond. Verify the contract ID is correct for network '$NETWORK'."; status FAILED reason=governance_verify_failed; exit 1; }
 
 log INFO "=== Rollback complete and verified ==="
 log INFO "Full log saved to: $LOG_FILE"
+status SUCCESS backup="$BACKUP_FILE"
+exit 0

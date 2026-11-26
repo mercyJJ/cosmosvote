@@ -65,37 +65,47 @@ jobs:
             const url = '${{ steps.netlify.outputs.deploy-url }}';
             const prNumber = context.payload.pull_request.number;
             const sha = context.payload.pull_request.head.sha.substring(0, 7);
+            const deployedAt = new Date().toISOString();
+            const marker = '<!-- preview-deployment -->';
 
-            // Delete any previous preview comment from this bot to keep the thread clean
+            const body = [
+              marker,
+              '### 🚀 Preview deployment ready',
+              '',
+              `**URL:** ${url}`,
+              `**Commit:** \`${sha}\``,
+              `**Deployed:** ${deployedAt}`,
+              `**Network:** testnet`,
+              '',
+              '_This preview is automatically deleted when the PR is closed._',
+            ].join('\n');
+
+            // Find an existing preview comment from this bot so we update it
+            // instead of posting a duplicate on every push.
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: prNumber,
             });
-            for (const comment of comments) {
-              if (comment.user.type === 'Bot' && comment.body.includes('🚀 Preview deployment')) {
-                await github.rest.issues.deleteComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: comment.id,
-                });
-              }
-            }
+            const existing = comments.find(
+              (comment) => comment.user.type === 'Bot' && comment.body.includes(marker)
+            );
 
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: prNumber,
-              body: [
-                '### 🚀 Preview deployment ready',
-                '',
-                `**URL:** ${url}`,
-                `**Commit:** \`${sha}\``,
-                `**Network:** testnet`,
-                '',
-                '_This preview is automatically deleted when the PR is closed._',
-              ].join('\n'),
-            });
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
 
   # ── Tear down preview on PR close / merge ─────────────────────────────
   teardown-preview:

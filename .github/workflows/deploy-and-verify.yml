@@ -17,6 +17,14 @@ on:
         description: "Force rollback without deploying (for testing the rollback path)"
         required: false
         default: "false"
+      environment:
+        description: "Target environment (use 'staging' to exercise the rollback path safely)"
+        required: false
+        default: "production"
+        type: choice
+        options:
+          - production
+          - staging
 
 concurrency:
   group: mainnet-deploy
@@ -35,6 +43,7 @@ jobs:
       contents: read
     outputs:
       deploy_status: ${{ steps.deploy.outcome }}
+      previous_version: ${{ steps.previous_version.outputs.version }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -53,6 +62,18 @@ jobs:
           node-version: "20"
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
+
+      - name: Capture previous deployed version
+        id: previous_version
+        run: |
+          # Record the ETag of the currently deployed index.html so the rollback
+          # job can restore the last known-good version if smoke tests fail.
+          PREV_ETAG=$(aws s3api head-object \
+            --bucket "${{ secrets.S3_BUCKET }}" \
+            --key index.html \
+            --query 'ETag' --output text 2>/dev/null || echo "none")
+          echo "version=${PREV_ETAG}" >> "$GITHUB_OUTPUT"
+          echo "Previous deployed version (ETag): ${PREV_ETAG}"
 
       - name: Install frontend dependencies
         run: npm ci
@@ -126,6 +147,10 @@ jobs:
           echo "::error::Health checks failed after deployment. Rollback will be triggered."
           exit 1
 
+      - name: Fail job when health checks fail
+        if: steps.health.outcome == 'failure'
+        run: exit 1
+
   # ---------------------------------------------------------------------------
   # 3. Rollback (runs only when health check fails or force_rollback is set)
   # ---------------------------------------------------------------------------
@@ -161,11 +186,13 @@ jobs:
       - name: Run rollback script
         id: rollback
         env:
-          NETWORK: mainnet
+          NETWORK: ${{ github.event.inputs.environment == 'staging' && 'testnet' || 'mainnet' }}
           STELLAR_RPC_URL: ${{ vars.STELLAR_RPC_URL }}
           STELLAR_SECRET_KEY: ${{ secrets.STELLAR_SECRET_KEY }}
+          PREVIOUS_VERSION: ${{ needs.deploy.outputs.previous_version }}
         run: |
           chmod +x scripts/rollback.sh
+          echo "Rolling back from previous version: ${PREVIOUS_VERSION}"
           bash scripts/rollback.sh --latest 2>&1 | tee /tmp/rollback_output.txt
           echo "log_snippet=$(tail -20 /tmp/rollback_output.txt | tr '\n' '|')" >> "$GITHUB_OUTPUT"
         continue-on-error: true
@@ -191,7 +218,11 @@ jobs:
   incident-report:
     name: Post Incident Report to Slack
     needs: [deploy, health-check, rollback]
-    if: always() && needs.health-check.outputs.health_status == 'failure'
+    if: |
+      always() && (
+        needs.health-check.outputs.health_status == 'failure' ||
+        needs.rollback.outputs.rollback_status == 'failure'
+      )
     runs-on: ubuntu-latest
 
     steps:
@@ -205,6 +236,7 @@ jobs:
             echo "status=❌ Rollback FAILED — manual intervention required" >> "$GITHUB_OUTPUT"
             echo "color=danger" >> "$GITHUB_OUTPUT"
           fi
+          echo "previous_version=${{ needs.deploy.outputs.previous_version }}" >> "$GITHUB_OUTPUT"
 
       - name: Post incident report to Slack
         uses: slackapi/slack-github-action@37ebaef184d7626c5f204ab8d3baff4262dd30f0 # v2
@@ -230,6 +262,7 @@ jobs:
                         { "type": "mrkdwn", "text": "*Commit:*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>" },
                         { "type": "mrkdwn", "text": "*Actor:*\n${{ github.actor }}" },
                         { "type": "mrkdwn", "text": "*Branch:*\n${{ github.ref_name }}" },
+                        { "type": "mrkdwn", "text": "*Previous version:*\n${{ steps.outcome.outputs.previous_version }}" },
                         { "type": "mrkdwn", "text": "*Time (UTC):*\n${{ github.event.head_commit.timestamp }}" }
                       ]
                     },
@@ -237,14 +270,14 @@ jobs:
                       "type": "section",
                       "text": {
                         "type": "mrkdwn",
-                        "text": "*What happened:*\nPost-deploy health checks failed. The rollback script was triggered automatically to restore the last known-good contract ID references."
+                        "text": "*What happened:*\nPost-deploy health checks failed. The rollback script was triggered automatically to restore the last known-good contract ID references and the previous deployed version (${{ steps.outcome.outputs.previous_version }})."
                       }
                     },
                     {
                       "type": "section",
                       "text": {
                         "type": "mrkdwn",
-                        "text": "*Next steps:*\n1. Review the <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|workflow run> and the rollback log artifact.\n2. Identify the root cause in the failing commit.\n3. Fix and re-deploy once confident."
+                        "text": "*Next steps:*\n1. Review the <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|workflow run> and the rollback log artifact.\n2. Identify the root cause in the failing commit.\n3. Fix and re-deploy once confident.\n\n_Note: the rollback path can be exercised safely in staging via `workflow_dispatch` with `environment: staging` and `force_rollback: true`._"
                       }
                     }
                   ]

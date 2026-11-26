@@ -18,6 +18,8 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    assignees:
+      - maintainers
     labels:
       - dependencies
       - rust
@@ -36,6 +38,8 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    assignees:
+      - maintainers
     labels:
       - dependencies
       - javascript
@@ -53,6 +57,8 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    assignees:
+      - maintainers
     labels:
       - dependencies
       - javascript

@@ -14,8 +14,13 @@ PR is closed or merged.
    - The React + Vite app is built pointed at the **testnet** RPC endpoint.
    - The built `frontend/dist/` directory is deployed to Netlify under a unique alias
      (`pr-<number>`).
-   - Any previous preview comment from the GitHub Actions bot is deleted and replaced
-     with a new one containing the live URL.
+   - The preview URL is posted as a PR comment. A single comment is created on the
+     first successful deploy and **updated in place** (not duplicated) on subsequent
+     pushes to the same PR. The comment includes:
+     - the live preview URL,
+     - the deployment timestamp (UTC),
+     - the commit SHA of the deployed revision.
+=======
 3. On `closed` (PR merged or abandoned):
    - The workflow calls the Netlify API to look up and delete the `pr-<number>` deploy.
    - A teardown notice is posted as a final PR comment.
